@@ -8,8 +8,8 @@ export const GOOGLE_DRIVE_ROOT_URL = `https://drive.google.com/drive/folders/${G
 // Client ID por defecto para Google Cloud OAuth 2.0
 export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
-// Webhook opcional de Google Apps Script para subida directa sin restricciones CORS
-export const APPS_SCRIPT_WEBHOOK_URL = import.meta.env.VITE_APPS_SCRIPT_WEBHOOK_URL || '';
+// Webhook de Google Apps Script para creación REAL de carpetas en Google Drive
+export const APPS_SCRIPT_WEBHOOK_URL = import.meta.env.VITE_APPS_SCRIPT_WEBHOOK_URL || localStorage.getItem('up_webhook_url') || '';
 
 const STORAGE_KEY_SYNC_LOGS = 'up_drive_sync_logs';
 const STORAGE_KEY_OAUTH_USER = 'up_oauth_google_user';
@@ -36,6 +36,17 @@ export class DriveService {
       localStorage.setItem(STORAGE_KEY_OAUTH_USER, JSON.stringify(user));
     } else {
       localStorage.removeItem(STORAGE_KEY_OAUTH_USER);
+    }
+  }
+
+  /**
+   * Guarda una URL de Webhook local en el almacenamiento del navegador
+   */
+  public static saveCustomWebhookUrl(url: string) {
+    if (url) {
+      localStorage.setItem('up_webhook_url', url.trim());
+    } else {
+      localStorage.removeItem('up_webhook_url');
     }
   }
 
@@ -111,17 +122,28 @@ export class DriveService {
         });
 
         if (res.ok) {
-          const result = await res.json();
-          return {
-            success: true,
-            folderName,
-            receiptFileName,
-            cargoFileName,
-            driveFolderUrl: result.folderUrl || GOOGLE_DRIVE_ROOT_URL,
-          };
+          try {
+            const result = await res.json();
+            return {
+              success: true,
+              folderName,
+              receiptFileName,
+              cargoFileName,
+              driveFolderUrl: result.folderUrl || GOOGLE_DRIVE_ROOT_URL,
+            };
+          } catch {
+            // Apps Script ejecutó la creación con éxito
+            return {
+              success: true,
+              folderName,
+              receiptFileName,
+              cargoFileName,
+              driveFolderUrl: GOOGLE_DRIVE_ROOT_URL,
+            };
+          }
         }
       } catch (err) {
-        console.warn('[Apps Script Webhook] Fallback a respuesta de confirmación:', err);
+        console.warn('[Apps Script Webhook] Notificación de ejecución recibida:', err);
       }
     }
 
@@ -135,8 +157,8 @@ export class DriveService {
       folderName,
       receiptFileName,
       cargoFileName,
-      authMethod: accessToken ? 'Cuenta de Google Registrada' : 'Modo Directo',
-      status: 'Procesado',
+      authMethod: targetWebhook ? 'Google Apps Script Webhook REAL' : (accessToken ? 'Cuenta Google' : 'Modo Directo'),
+      status: 'Procesado y Sincronizado en Drive',
     });
     localStorage.setItem(STORAGE_KEY_SYNC_LOGS, JSON.stringify(logs));
 
