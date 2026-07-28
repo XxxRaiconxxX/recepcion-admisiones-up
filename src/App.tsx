@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Navbar } from './components/Navbar';
 import { ReceptionForm } from './components/ReceptionForm';
 import { ComprobantesModal } from './components/ComprobantesModal';
@@ -122,6 +123,7 @@ export function App() {
           Universidad del Pacífico — Sistema Digital de Admisiones y Recepción
         </p>
       </footer>
+      <Analytics />
     </div>
   );
 }
