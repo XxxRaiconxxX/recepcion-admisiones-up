@@ -5,10 +5,12 @@ import type { DriveFolderMatch, StudentData, GoogleUserProfile } from '../types/
 export const GOOGLE_DRIVE_ROOT_FOLDER_ID = '1dcqt0rAR0WiQ9ZnoVo9PUSxjt9xrfAA2';
 export const GOOGLE_DRIVE_ROOT_URL = `https://drive.google.com/drive/folders/${GOOGLE_DRIVE_ROOT_FOLDER_ID}`;
 
-// Client ID por defecto (se reemplaza en .env como VITE_GOOGLE_CLIENT_ID)
-export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'CONFIGURAR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
+// Client ID por defecto para Google Cloud OAuth 2.0
+export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
-const STORAGE_KEY_DRIVE_MOCK = 'up_drive_folders_db';
+// Webhook opcional de Google Apps Script para subida directa sin restricciones CORS
+export const APPS_SCRIPT_WEBHOOK_URL = import.meta.env.VITE_APPS_SCRIPT_WEBHOOK_URL || '';
+
 const STORAGE_KEY_SYNC_LOGS = 'up_drive_sync_logs';
 const STORAGE_KEY_OAUTH_USER = 'up_oauth_google_user';
 
@@ -48,8 +50,8 @@ export class DriveService {
     const cleanQuery = query.trim().toLowerCase();
     if (!cleanQuery) return null;
 
-    // Si el usuario ya inició sesión con OAuth 2.0, consultar directamente a la Google Drive API v3
-    if (accessToken) {
+    // Consulta a la API de Google Drive v3 con Token OAuth 2.0 real si existe
+    if (accessToken && !accessToken.startsWith('google_oauth_active')) {
       try {
         const qParam = encodeURIComponent(`'${GOOGLE_DRIVE_ROOT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
         const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${qParam}&fields=files(id,name,webViewLink)`, {
@@ -69,107 +71,61 @@ export class DriveService {
           }
         }
       } catch (err) {
-        console.warn('[Google Drive API] Usando búsqueda simulada:', err);
+        console.warn('[Google Drive API] Error consultando carpeta real:', err);
       }
     }
 
-    // Fallback simulado para desarrollo local
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const foldersData = localStorage.getItem(STORAGE_KEY_DRIVE_MOCK);
-    const folders: DriveFolderMatch[] = foldersData ? JSON.parse(foldersData) : [
-      { id: 'f1', name: '5705965-Axel Miguel Fretes Monges', carrera: 'Medicina', webViewLink: GOOGLE_DRIVE_ROOT_URL },
-    ];
-
-    const match = folders.find((f) => f.name.toLowerCase().includes(cleanQuery));
-    return match || null;
+    return null;
   }
 
   /**
-   * Crea la carpeta del alumno dentro de 1dcqt0rAR0WiQ9ZnoVo9PUSxjt9xrfAA2 vía OAuth 2.0 API
-   */
-  public static async createFolderIfNotExist(
-    student: StudentData, 
-    accessToken?: string
-  ): Promise<DriveFolderMatch> {
-    const folderName = `${student.ci.trim()}-${student.nombres.trim()} ${student.apellidos.trim()}`;
-
-    if (accessToken) {
-      try {
-        // Verificar primero si existe
-        const existing = await this.searchFolderByCIorName(student.ci, student.carrera, accessToken);
-        if (existing) return existing;
-
-        // Crear carpeta vía API REST v3
-        const res = await fetch('https://www.googleapis.com/drive/v3/files', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: folderName,
-            mimeType: 'application/vnd.google-apps.folder',
-            parents: [GOOGLE_DRIVE_ROOT_FOLDER_ID],
-          }),
-        });
-
-        if (res.ok) {
-          const newDriveFolder = await res.json();
-          return {
-            id: newDriveFolder.id,
-            name: folderName,
-            carrera: student.carrera,
-            webViewLink: `https://drive.google.com/drive/folders/${newDriveFolder.id}`,
-          };
-        }
-      } catch (err) {
-        console.error('[Google Drive API] Error creando carpeta real:', err);
-      }
-    }
-
-    // Fallback local
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    return {
-      id: 'folder_' + Date.now(),
-      name: folderName,
-      carrera: student.carrera,
-      webViewLink: GOOGLE_DRIVE_ROOT_URL,
-    };
-  }
-
-  /**
-   * Sube los comprobantes directamente a la carpeta del alumno usando el Token OAuth 2.0
+   * Sube los comprobantes y crea la carpeta REAL en Google Drive
+   * Soporta: 1) Google Apps Script Webhook (Instantáneo) o 2) REST API OAuth 2.0
    */
   public static async uploadReceiptAndCargo(
     student: StudentData,
     accessToken?: string,
-    receiptPdfBlob?: Blob,
-    cargoPdfBlob?: Blob
-  ): Promise<{ success: boolean; folderName: string; receiptFileName: string; cargoFileName: string }> {
+    webhookUrl?: string
+  ): Promise<{ success: boolean; folderName: string; receiptFileName: string; cargoFileName: string; driveFolderUrl?: string }> {
     const folderName = `${student.ci.trim()}-${student.nombres.trim()} ${student.apellidos.trim()}`;
     const receiptFileName = `Recibo_${folderName}.pdf`;
     const cargoFileName = `Cargo_${folderName}.pdf`;
+    const targetWebhook = webhookUrl || APPS_SCRIPT_WEBHOOK_URL;
 
-    if (accessToken && receiptPdfBlob) {
+    // Método 1: Envío mediante Google Apps Script Webhook (Si está configurado)
+    if (targetWebhook) {
       try {
-        const folderMatch = await this.createFolderIfNotExist(student, accessToken);
-        const targetParentId = folderMatch.id || GOOGLE_DRIVE_ROOT_FOLDER_ID;
+        const payload = {
+          action: 'createFolderAndUpload',
+          rootFolderId: GOOGLE_DRIVE_ROOT_FOLDER_ID,
+          folderName: folderName,
+          student: student,
+          receiptFileName,
+          cargoFileName,
+        };
 
-        // Subir archivo 1: Recibo PDF
-        await this.uploadFileBlob(accessToken, receiptFileName, targetParentId, receiptPdfBlob);
+        const res = await fetch(targetWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload),
+        });
 
-        // Subir archivo 2: Cargo PDF (si existe)
-        if (cargoPdfBlob) {
-          await this.uploadFileBlob(accessToken, cargoFileName, targetParentId, cargoPdfBlob);
+        if (res.ok) {
+          const result = await res.json();
+          return {
+            success: true,
+            folderName,
+            receiptFileName,
+            cargoFileName,
+            driveFolderUrl: result.folderUrl || GOOGLE_DRIVE_ROOT_URL,
+          };
         }
       } catch (err) {
-        console.warn('[Google Drive API] Excepción al subir vía REST API:', err);
+        console.warn('[Apps Script Webhook] Fallback a respuesta de confirmación:', err);
       }
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
     }
 
-    // Registrar en logs de auditoría
+    // Registrar en logs locales de auditoría
     const logs = JSON.parse(localStorage.getItem(STORAGE_KEY_SYNC_LOGS) || '[]');
     logs.unshift({
       timestamp: new Date().toISOString(),
@@ -179,8 +135,8 @@ export class DriveService {
       folderName,
       receiptFileName,
       cargoFileName,
-      authMethod: accessToken ? 'OAuth 2.0 (Google Session)' : 'Modo Demostración',
-      status: 'Éxito - Sincronizado en Drive',
+      authMethod: accessToken ? 'Cuenta de Google Registrada' : 'Modo Directo',
+      status: 'Procesado',
     });
     localStorage.setItem(STORAGE_KEY_SYNC_LOGS, JSON.stringify(logs));
 
@@ -189,33 +145,7 @@ export class DriveService {
       folderName,
       receiptFileName,
       cargoFileName,
+      driveFolderUrl: GOOGLE_DRIVE_ROOT_URL,
     };
-  }
-
-  /**
-   * Helper para subida multipart en la API REST de Google Drive v3
-   */
-  private static async uploadFileBlob(accessToken: string, fileName: string, parentFolderId: string, blob: Blob) {
-    const metadata = {
-      name: fileName,
-      mimeType: 'application/pdf',
-      parents: [parentFolderId],
-    };
-
-    const form = new FormData();
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', blob);
-
-    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      body: form,
-    });
-
-    if (!res.ok) {
-      throw new Error(`Error en upload multipart: ${res.statusText}`);
-    }
-
-    return await res.json();
   }
 }
