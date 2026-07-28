@@ -13,7 +13,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ user, driveStatus, folderName, onOpenOAuthModal }) => {
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-lg">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between gap-4">
+      <div className="max-w-[1380px] w-full mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between gap-4">
         
         {/* Logo Branding UP - Compacto e Idéntico a Imagen 2 */}
         <div className="flex items-center space-x-3 shrink-0">
@@ -31,7 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, driveStatus, folderName, o
           </div>
         </div>
 
-        {/* Dynamic Drive Sync Badge & Google OAuth - Fiel a la Imagen 2 (Sin scrollbar) */}
+        {/* Dynamic Drive Sync Badge & Google OAuth - Alineado a max-w-[1380px] */}
         <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           
           {/* Direct Link to Google Drive Root Folder */}
