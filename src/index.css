@@ -4,9 +4,10 @@
 @layer base {
   body {
     font-family: 'Inter', system-ui, sans-serif;
-    background-color: #f8fafc;
+    background-color: #020617;
     color: #0f172a;
     -webkit-font-smoothing: antialiased;
+    zoom: 0.85; /* Escala toda la interfaz al 85% de forma nativa */
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -25,6 +26,7 @@
     background: #ffffff !important;
     color: #000000 !important;
     font-size: 11pt;
+    zoom: 1 !important; /* Desactivar escala zoom en impresión A4 */
   }
 
   .no-print {

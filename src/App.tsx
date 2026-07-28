@@ -40,17 +40,17 @@ export function App() {
         onOpenOAuthModal={() => setIsOAuthModalOpen(true)}
       />
 
-      {/* Cuerpo Principal */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Cuerpo Principal - Escala Compacta y Holgada */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
         
         {/* Banner Informativo del Flujo de Trabajo */}
-        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 border border-blue-900/40 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 border border-blue-900/40 rounded-2xl p-5 shadow-xl relative overflow-hidden">
           <div className="absolute -right-10 -bottom-10 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
 
-          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
             <div className="space-y-1.5 max-w-2xl">
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-900/60 border border-blue-700/60 text-blue-300 text-xs font-semibold uppercase tracking-wider">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-900/60 border border-blue-700/60 text-blue-300 text-[11px] font-semibold uppercase tracking-wider">
                   <ShieldCheck className="w-3.5 h-3.5" /> Proceso Digital de Admisiones
                 </span>
                 {googleUser && (
@@ -59,31 +59,31 @@ export function App() {
                   </span>
                 )}
               </div>
-              <h2 className="text-2xl font-extrabold text-white font-heading tracking-tight">
+              <h2 className="text-xl sm:text-2xl font-extrabold text-white font-heading tracking-tight">
                 Recepción de Documentos y Cargo de Entrega
               </h2>
-              <p className="text-sm text-slate-300">
+              <p className="text-xs sm:text-sm text-slate-300">
                 Genera el <strong className="text-white">Recibo de Recepción (Imagen 1)</strong> para el alumno y el <strong className="text-white">Cargo de Entrega (Imagen 2)</strong> para el asesor, conectando directamente con la carpeta de Google Drive.
               </p>
             </div>
 
             {/* Pasos resumidos */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-slate-900/80 border border-slate-800 p-3 rounded-xl text-center">
-                <div className="text-xs text-blue-400 font-bold">Paso 1</div>
-                <div className="text-[11px] text-slate-300 font-medium">Asesor escanea documentos</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl text-center">
+                <div className="text-[11px] text-blue-400 font-bold">Paso 1</div>
+                <div className="text-[10px] text-slate-300 font-medium">Asesor escanea docs</div>
               </div>
-              <div className="bg-slate-900/80 border border-slate-800 p-3 rounded-xl text-center">
-                <div className="text-xs text-blue-400 font-bold">Paso 2</div>
-                <div className="text-[11px] text-slate-300 font-medium">Recepción valida 4 docs</div>
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl text-center">
+                <div className="text-[11px] text-blue-400 font-bold">Paso 2</div>
+                <div className="text-[10px] text-slate-300 font-medium">Recepción valida 4 docs</div>
               </div>
-              <div className="bg-slate-900/80 border border-slate-800 p-3 rounded-xl text-center">
-                <div className="text-xs text-blue-400 font-bold">Paso 3</div>
-                <div className="text-[11px] text-slate-300 font-medium">Emisión e Impresión A4</div>
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl text-center">
+                <div className="text-[11px] text-blue-400 font-bold">Paso 3</div>
+                <div className="text-[10px] text-slate-300 font-medium">Emisión e Impresión</div>
               </div>
-              <div className="bg-slate-900/80 border border-slate-800 p-3 rounded-xl text-center border-emerald-900/50 bg-emerald-950/20">
-                <div className="text-xs text-emerald-400 font-bold">Paso 4</div>
-                <div className="text-[11px] text-emerald-200 font-medium">Subida a Google Drive</div>
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl text-center border-emerald-900/50 bg-emerald-950/20">
+                <div className="text-[11px] text-emerald-400 font-bold">Paso 4</div>
+                <div className="text-[10px] text-emerald-200 font-medium">Subida a Drive</div>
               </div>
             </div>
           </div>
@@ -117,7 +117,7 @@ export function App() {
       )}
 
       {/* Pie de Página Limpio */}
-      <footer className="border-t border-slate-800 bg-slate-900 text-slate-400 py-6 text-center text-xs">
+      <footer className="border-t border-slate-800 bg-slate-900 text-slate-400 py-5 text-center text-xs">
         <p className="font-medium text-slate-300">
           Universidad del Pacífico — Sistema Digital de Admisiones y Recepción
         </p>
