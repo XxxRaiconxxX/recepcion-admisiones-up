@@ -13,54 +13,54 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ user, driveStatus, folderName, onOpenOAuthModal }) => {
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-lg">
-      <div className="w-full max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 h-22 flex items-center justify-between gap-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between gap-4">
         
-        {/* Logo Branding UP - Limpio y Espacioso */}
-        <div className="flex items-center space-x-4 shrink-0">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-500 flex items-center justify-center font-bold text-white shadow-md border border-blue-400/30 shrink-0">
-            <span className="text-xl tracking-tighter">UP</span>
+        {/* Logo Branding UP - Compacto e Idéntico a Imagen 2 */}
+        <div className="flex items-center space-x-3 shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-500 flex items-center justify-center font-bold text-white shadow-md border border-blue-400/30 shrink-0">
+            <span className="text-base tracking-tighter">UP</span>
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white font-heading whitespace-nowrap">
+            <h1 className="text-base sm:text-lg font-bold tracking-tight text-white font-heading whitespace-nowrap">
               UNIVERSIDAD DEL PACÍFICO
             </h1>
-            <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-1 whitespace-nowrap">
+            <p className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5 whitespace-nowrap">
               <Building2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
               Gestión Digital de Admisiones • Recepción & Cargo de Entrega
             </p>
           </div>
         </div>
 
-        {/* Dynamic Drive Sync Badge & Google OAuth - Holgado y Desahogado */}
-        <div className="flex items-center gap-4 sm:gap-5 overflow-x-auto py-1">
+        {/* Dynamic Drive Sync Badge & Google OAuth - Fiel a la Imagen 2 (Sin scrollbar) */}
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           
           {/* Direct Link to Google Drive Root Folder */}
           <a
             href={GOOGLE_DRIVE_ROOT_URL}
             target="_blank"
             rel="noreferrer"
-            className="hidden sm:flex items-center gap-2 bg-slate-800/90 hover:bg-slate-800 px-4 py-2.5 rounded-xl border border-slate-700 text-xs text-blue-300 transition-colors whitespace-nowrap font-medium shadow-sm"
+            className="hidden sm:flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 text-xs text-blue-300 transition-colors whitespace-nowrap font-medium shadow-sm"
           >
-            <ExternalLink className="w-4 h-4 text-blue-400 shrink-0" />
+            <ExternalLink className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span>Drive Raíz</span>
           </a>
 
           {folderName && (
-            <div className="hidden lg:flex items-center gap-2.5 bg-slate-800/90 px-4 py-2 rounded-xl border border-slate-700 text-xs whitespace-nowrap shadow-sm">
-              <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div className="hidden md:flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl border border-slate-700 text-xs whitespace-nowrap shadow-sm">
+              <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span className="text-slate-400 font-medium">Carpeta Alumno:</span>
-              <span className="text-emerald-300 font-mono font-bold">{folderName}</span>
+              <span className="text-emerald-300 font-mono font-bold text-[11px] truncate max-w-[200px]">{folderName}</span>
             </div>
           )}
 
           {/* Drive Status Badge */}
-          <div className="flex items-center gap-2.5 bg-slate-800/90 px-4 py-2 rounded-xl border border-slate-700 text-xs whitespace-nowrap shadow-inner">
-            <CloudCheck className={`w-4.5 h-4.5 shrink-0 ${
+          <div className="flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl border border-slate-700 text-xs whitespace-nowrap shadow-inner">
+            <CloudCheck className={`w-4 h-4 shrink-0 ${
               driveStatus === 'synced' ? 'text-emerald-400 animate-bounce' :
               driveStatus === 'syncing' ? 'text-amber-400 animate-spin' :
               'text-blue-400'
             }`} />
-            <span className="font-semibold text-slate-200">
+            <span className="font-semibold text-slate-200 text-[11px]">
               {driveStatus === 'synced' ? 'Sincronizado' :
                driveStatus === 'syncing' ? 'Subiendo PDFs...' :
                driveStatus === 'found' ? 'Carpeta Vinculada' :
@@ -68,10 +68,10 @@ export const Navbar: React.FC<NavbarProps> = ({ user, driveStatus, folderName, o
             </span>
           </div>
 
-          {/* Google OAuth Login Button (Option 2) */}
+          {/* Google OAuth Login Button */}
           <button
             onClick={onOpenOAuthModal}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2.5 border shadow-sm whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border shadow-sm whitespace-nowrap shrink-0 cursor-pointer ${
               user 
                 ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300 hover:bg-emerald-900' 
                 : 'bg-white text-slate-900 border-slate-200 hover:bg-slate-100'
