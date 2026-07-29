@@ -107,10 +107,10 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
           <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.otros ? 'bg-slate-900 text-white' : 'bg-white'}`}>
             {student.otros ? '✓' : ''}
           </div>
-          <div className="flex-1 text-sm font-medium flex items-center gap-2">
+          <div className="flex-1 min-w-0 overflow-hidden text-sm font-medium flex items-center gap-2">
             <span>Otros:</span>
-            <span className="border-b border-dotted border-slate-700 flex-1 px-2 font-mono">
-              {student.descripcionOtros || '...........................................................................................'}
+            <span className="border-b border-dotted border-slate-700 flex-1 min-w-0 overflow-hidden whitespace-nowrap px-2 font-mono">
+              {student.descripcionOtros || '\u00A0'}
             </span>
           </div>
         </div>

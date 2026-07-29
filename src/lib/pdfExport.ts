@@ -1,6 +1,35 @@
 import { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType, AlignmentType, BorderStyle } from 'docx';
-import { saveAs } from 'file-saver';
+import saveAs from 'file-saver';
 import type { StudentData } from '../types/admission';
+
+export const hasVisiblePdfPixels = (
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+) => {
+  if (width <= 0 || height <= 0 || pixels.length < width * height * 4) return false;
+
+  const minX = Math.floor(width * 0.05);
+  const maxX = Math.ceil(width * 0.95);
+  const minY = Math.floor(height * 0.05);
+  const maxY = Math.ceil(height * 0.95);
+  let visiblePixels = 0;
+
+  for (let y = minY; y < maxY; y += 2) {
+    for (let x = minX; x < maxX; x += 2) {
+      const offset = (y * width + x) * 4;
+      if (
+        pixels[offset + 3] > 0 &&
+        (pixels[offset] < 245 || pixels[offset + 1] < 245 || pixels[offset + 2] < 245)
+      ) {
+        visiblePixels += 1;
+        if (visiblePixels >= 200) return true;
+      }
+    }
+  }
+
+  return false;
+};
 
 export class DocumentExporter {
   /**
@@ -61,9 +90,15 @@ export class DocumentExporter {
 
     const { default: html2pdf } = await import('html2pdf.js');
     let pdf: Blob;
+    const previousBodyZoom = document.body.style.getPropertyValue('zoom');
 
     try {
-      pdf = await html2pdf()
+      // html2pdf monta su lienzo dentro de body; el zoom global de la UI recorta
+      // y, según el navegador, puede dejar en blanco el foreignObject.
+      document.body.style.setProperty('zoom', '1');
+      await document.fonts.ready;
+
+      const worker = html2pdf()
         .set({
           margin: 0,
           image: { type: 'jpeg', quality: 0.98 },
@@ -76,8 +111,28 @@ export class DocumentExporter {
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         })
         .from(element)
-        .outputPdf('blob');
+        .toCanvas();
+      const canvas = (await worker.get('canvas')) as HTMLCanvasElement;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+
+      if (
+        !context ||
+        !hasVisiblePdfPixels(
+          context.getImageData(0, 0, canvas.width, canvas.height).data,
+          canvas.width,
+          canvas.height,
+        )
+      ) {
+        throw new Error('El comprobante se generó en blanco y no se enviará a Google Drive.');
+      }
+
+      pdf = await worker.toPdf().outputPdf('blob');
     } finally {
+      if (previousBodyZoom) {
+        document.body.style.setProperty('zoom', previousBodyZoom);
+      } else {
+        document.body.style.removeProperty('zoom');
+      }
       document.querySelectorAll('.html2pdf__overlay').forEach((overlay) => overlay.remove());
     }
 
