@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
-  Search, 
   FolderCheck, 
   CheckSquare, 
   Square, 
@@ -12,8 +11,11 @@ import {
   FileText,
   UserCheck
 } from 'lucide-react';
-import type { StudentData, DriveFolderMatch } from '../types/admission';
-import { DriveService } from '../lib/driveClient';
+import type { StudentData } from '../types/admission';
+import {
+  getStudentDriveFolderName,
+  type DriveUploadResult,
+} from '../lib/driveClient';
 import { DocumentExporter } from '../lib/pdfExport';
 import { DriveSimulationModal } from './DriveSimulationModal';
 
@@ -50,34 +52,11 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
     driveSyncStatus: 'idle',
   });
 
-  const [searchResults, setSearchResults] = useState<DriveFolderMatch | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
 
   // Nombre formateado de carpeta en Drive: CI-Nombre Completo Apellidos Completos
-  const fullDriveFolderName = `${student.ci.trim()}-${student.nombres.trim()} ${student.apellidos.trim()}`;
-
-  // Efecto para buscar automáticamente en Drive cuando cambia el CI o los Nombres
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (student.ci.length >= 4 || student.nombres.length >= 3) {
-        setIsSearching(true);
-        onDriveStatusChange('searching');
-        const match = await DriveService.searchFolderByCIorName(student.ci || student.nombres, student.carrera, userToken);
-        setIsSearching(false);
-        if (match) {
-          setSearchResults(match);
-          onDriveStatusChange('found', match.name);
-        } else {
-          setSearchResults(null);
-          onDriveStatusChange('idle', fullDriveFolderName);
-        }
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [student.ci, student.nombres, student.carrera, userToken]);
+  const fullDriveFolderName = getStudentDriveFolderName(student);
 
   const handleChange = (field: keyof StudentData, value: any) => {
     setStudent((prev) => ({ ...prev, [field]: value }));
@@ -87,15 +66,38 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
     setStudent((prev) => ({ ...prev, [field]: !prev[field] }));
   };
 
-  // Abrir la simulación de subida a Google Drive en tiempo real
+  // Iniciar la generación y subida real a Google Drive.
   const handleUploadToDrive = () => {
+    handleChange('driveSyncStatus', 'syncing');
+    onDriveStatusChange('syncing', fullDriveFolderName);
+    setSyncMessage(null);
     setIsSimulationOpen(true);
   };
 
-  const handleSimulationComplete = () => {
+  const handleSimulationStart = () => {
+    handleChange('driveSyncStatus', 'syncing');
+    onDriveStatusChange('syncing', fullDriveFolderName);
+    setSyncMessage(null);
+  };
+
+  const handleSimulationComplete = (result: DriveUploadResult) => {
     handleChange('driveSyncStatus', 'synced');
-    onDriveStatusChange('synced', fullDriveFolderName);
-    setSyncMessage(`¡Archivos subidos con éxito a Drive en la carpeta: ${fullDriveFolderName}!`);
+    onDriveStatusChange('synced', result.folderName);
+    setSyncMessage(`¡Recibo y Cargo confirmados en Drive: ${result.folderName}!`);
+  };
+
+  const handleSimulationError = () => {
+    handleChange('driveSyncStatus', 'error');
+    onDriveStatusChange('error', fullDriveFolderName);
+    setSyncMessage(null);
+  };
+
+  const handleSimulationClose = () => {
+    if (student.driveSyncStatus === 'syncing') {
+      handleChange('driveSyncStatus', 'idle');
+      onDriveStatusChange('idle', fullDriveFolderName);
+    }
+    setIsSimulationOpen(false);
   };
 
   // Descarga directa del Cargo en Word (.docx)
@@ -146,19 +148,9 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
         {/* Indicador de Estado de Drive */}
         <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
-            {isSearching ? (
-              <span className="text-amber-400 flex items-center gap-1.5 animate-pulse">
-                <Search className="w-3.5 h-3.5" /> Buscando carpeta del alumno en Google Drive...
-              </span>
-            ) : searchResults ? (
-              <span className="text-emerald-400 font-medium flex items-center gap-1.5">
-                <FolderCheck className="w-4 h-4" /> Carpeta encontrada en Drive: <strong>{searchResults.name}</strong>
-              </span>
-            ) : (
-              <span className="text-blue-300 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-blue-400" /> La carpeta se creará automáticamente en Drive al subir.
-              </span>
-            )}
+            <span className="text-blue-300 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-blue-400" /> Al subir se buscará este legajo exacto; nunca se creará una carpeta.
+            </span>
           </div>
 
           {syncMessage && (
@@ -469,27 +461,35 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
 
           <button
             onClick={handleUploadToDrive}
-            disabled={student.driveSyncStatus === 'syncing'}
-            className={`px-5 py-3 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer ${
+            disabled={student.driveSyncStatus === 'syncing' || !userToken}
+            title={!userToken ? 'Verifica primero una cuenta de Google desde la barra superior.' : undefined}
+            className={`px-5 py-3 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
               student.driveSyncStatus === 'synced'
                 ? 'bg-emerald-700 text-white hover:bg-emerald-800'
                 : 'bg-emerald-600 text-white hover:bg-emerald-700'
             }`}
           >
             <UploadCloud className="w-4 h-4" />
-            {student.driveSyncStatus === 'syncing' ? 'Subiendo a Drive...' : 'Enviar Recibo + Cargo a Google Drive'}
+            {!userToken
+              ? 'Verifica Google para enviar a Drive'
+              : student.driveSyncStatus === 'syncing'
+                ? 'Subiendo a Drive...'
+                : 'Enviar Recibo + Cargo al legajo existente'}
           </button>
 
         </div>
 
       </div>
 
-      {/* Modal de Simulación Real de Conexión y Subida a Google Drive */}
+      {/* Modal de generación y subida real a Google Drive */}
       {isSimulationOpen && (
         <DriveSimulationModal
           student={student}
-          onClose={() => setIsSimulationOpen(false)}
+          idToken={userToken}
+          onClose={handleSimulationClose}
+          onStart={handleSimulationStart}
           onComplete={handleSimulationComplete}
+          onError={handleSimulationError}
         />
       )}
 

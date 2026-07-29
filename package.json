@@ -7,12 +7,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "node --test tests/*.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "docx": "^9.7.1",
     "file-saver": "^2.0.5",
+    "google-auth-library": "^10.9.1",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^1.27.0",
     "react": "^19.2.7",

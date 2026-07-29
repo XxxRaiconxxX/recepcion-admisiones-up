@@ -51,6 +51,44 @@ export class DocumentExporter {
   }
 
   /**
+   * Genera un PDF en memoria para enviarlo a Drive sin descargarlo.
+   */
+  public static async generatePdfBlob(elementId: string): Promise<Blob> {
+    const element = document.getElementById(elementId);
+    if (!element) {
+      throw new Error('No se encontró el comprobante para generar el PDF.');
+    }
+
+    const { default: html2pdf } = await import('html2pdf.js');
+    let pdf: Blob;
+
+    try {
+      pdf = await html2pdf()
+        .set({
+          margin: 0,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            foreignObjectRendering: true,
+            backgroundColor: '#ffffff',
+          },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        })
+        .from(element)
+        .outputPdf('blob');
+    } finally {
+      document.querySelectorAll('.html2pdf__overlay').forEach((overlay) => overlay.remove());
+    }
+
+    if (!(pdf instanceof Blob) || pdf.size === 0) {
+      throw new Error('Google Drive recibió un PDF vacío.');
+    }
+
+    return pdf;
+  }
+
+  /**
    * Genera y descarga el archivo Microsoft Word (.docx) editable del Cargo de Entrega (Matching Imagen 2)
    */
   public static async generateCargoWordDocx(student: StudentData, documentosStr: string) {

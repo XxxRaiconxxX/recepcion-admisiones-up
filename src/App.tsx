@@ -91,7 +91,7 @@ export function App() {
 
         {/* Dashboard de Recepción */}
         <ReceptionForm
-          userToken={googleUser?.accessToken}
+          userToken={googleUser?.idToken}
           onOpenPreview={(student) => setPreviewStudent(student)}
           onDriveStatusChange={handleDriveStatusChange}
         />

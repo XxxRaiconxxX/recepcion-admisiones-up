@@ -2,7 +2,7 @@ export interface GoogleUserProfile {
   email: string;
   name: string;
   picture?: string;
-  accessToken?: string;
+  idToken?: string;
   tokenExpiry?: number;
 }
 
@@ -31,7 +31,7 @@ export interface StudentData {
   // Estado de Integración con Google Drive
   driveFolderId?: string;
   driveFolderPath?: string;
-  driveSyncStatus: 'idle' | 'searching' | 'found' | 'syncing' | 'synced' | 'error';
+  driveSyncStatus: 'idle' | 'syncing' | 'synced' | 'error';
 }
 
 export interface CargoItem {
@@ -40,11 +40,4 @@ export interface CargoItem {
   carrera: string;
   documentosStr: string;
   observacion: string;
-}
-
-export interface DriveFolderMatch {
-  id: string;
-  name: string;
-  carrera: string;
-  webViewLink?: string;
 }

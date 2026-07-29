@@ -5,7 +5,7 @@ import { GOOGLE_DRIVE_ROOT_URL } from '../lib/driveClient';
 
 interface NavbarProps {
   user: GoogleUserProfile | null;
-  driveStatus: 'idle' | 'searching' | 'found' | 'syncing' | 'synced' | 'error';
+  driveStatus: 'idle' | 'syncing' | 'synced' | 'error';
   folderName?: string;
   onOpenOAuthModal: () => void;
 }
@@ -58,13 +58,14 @@ export const Navbar: React.FC<NavbarProps> = ({ user, driveStatus, folderName, o
             <CloudCheck className={`w-4 h-4 shrink-0 ${
               driveStatus === 'synced' ? 'text-emerald-400 animate-bounce' :
               driveStatus === 'syncing' ? 'text-amber-400 animate-spin' :
+              driveStatus === 'error' ? 'text-red-400' :
               'text-blue-400'
             }`} />
             <span className="font-semibold text-slate-200 text-[11px]">
               {driveStatus === 'synced' ? 'Sincronizado' :
                driveStatus === 'syncing' ? 'Subiendo PDFs...' :
-               driveStatus === 'found' ? 'Carpeta Vinculada' :
-               'Drive API Lista'}
+               driveStatus === 'error' ? 'Error de Drive' :
+               user ? 'Cuenta verificada' : 'Sin autenticar'}
             </span>
           </div>
 

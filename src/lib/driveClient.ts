@@ -1,4 +1,4 @@
-import type { DriveFolderMatch, StudentData, GoogleUserProfile } from '../types/admission';
+import type { StudentData, GoogleUserProfile } from '../types/admission';
 
 // ID de la Carpeta Raíz de Admisiones de la Universidad del Pacífico
 // URL: https://drive.google.com/drive/folders/1dcqt0rAR0WiQ9ZnoVo9PUSxjt9xrfAA2
@@ -8,11 +8,39 @@ export const GOOGLE_DRIVE_ROOT_URL = `https://drive.google.com/drive/folders/${G
 // Client ID por defecto para Google Cloud OAuth 2.0
 export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
-// Webhook de Google Apps Script para creación REAL de carpetas en Google Drive
-export const APPS_SCRIPT_WEBHOOK_URL = import.meta.env.VITE_APPS_SCRIPT_WEBHOOK_URL || localStorage.getItem('up_webhook_url') || '';
-
 const STORAGE_KEY_SYNC_LOGS = 'up_drive_sync_logs';
 const STORAGE_KEY_OAUTH_USER = 'up_oauth_google_user';
+
+export interface DriveUploadResult {
+  success: true;
+  folderId: string;
+  folderName: string;
+  driveFolderUrl: string;
+  receiptFileName: string;
+  cargoFileName: string;
+  files: Array<{
+    id: string;
+    name: string;
+    url?: string;
+    created: boolean;
+  }>;
+}
+
+const normalizeNamePart = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+export const getStudentDriveFolderName = (student: StudentData) =>
+  `${student.ci.trim()}-${normalizeNamePart(student.nombres)} ${normalizeNamePart(student.apellidos)}`;
+
+const blobToBase64 = async (blob: Blob) => {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+
+  return btoa(binary);
+};
 
 export class DriveService {
   /**
@@ -22,8 +50,18 @@ export class DriveService {
     const data = localStorage.getItem(STORAGE_KEY_OAUTH_USER);
     if (!data) return null;
     try {
-      return JSON.parse(data);
+      const user = JSON.parse(data) as GoogleUserProfile;
+      if (
+        !user.idToken ||
+        !user.tokenExpiry ||
+        user.tokenExpiry <= Date.now() + 60_000
+      ) {
+        localStorage.removeItem(STORAGE_KEY_OAUTH_USER);
+        return null;
+      }
+      return user;
     } catch {
+      localStorage.removeItem(STORAGE_KEY_OAUTH_USER);
       return null;
     }
   }
@@ -40,134 +78,114 @@ export class DriveService {
   }
 
   /**
-   * Guarda una URL de Webhook local en el almacenamiento del navegador
-   */
-  public static saveCustomWebhookUrl(url: string) {
-    if (url) {
-      localStorage.setItem('up_webhook_url', url.trim());
-    } else {
-      localStorage.removeItem('up_webhook_url');
-    }
-  }
-
-  /**
-   * Realiza la búsqueda de carpetas usando OAuth REST API o fallback
-   */
-  public static async searchFolderByCIorName(
-    query: string, 
-    carrera?: string, 
-    accessToken?: string
-  ): Promise<DriveFolderMatch | null> {
-    const cleanQuery = query.trim().toLowerCase();
-    if (!cleanQuery) return null;
-
-    // Consulta a la API de Google Drive v3 con Token OAuth 2.0 real si existe
-    if (accessToken && !accessToken.startsWith('google_oauth_active')) {
-      try {
-        const qParam = encodeURIComponent(`'${GOOGLE_DRIVE_ROOT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
-        const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${qParam}&fields=files(id,name,webViewLink)`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const match = (data.files || []).find((f: any) => f.name.toLowerCase().includes(cleanQuery));
-          if (match) {
-            return {
-              id: match.id,
-              name: match.name,
-              carrera: carrera || 'Medicina',
-              webViewLink: match.webViewLink || GOOGLE_DRIVE_ROOT_URL,
-            };
-          }
-        }
-      } catch (err) {
-        console.warn('[Google Drive API] Error consultando carpeta real:', err);
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Sube los comprobantes y crea la carpeta REAL en Google Drive
-   * Soporta: 1) Google Apps Script Webhook (Instantáneo) o 2) REST API OAuth 2.0
+   * Busca el legajo ya existente y sube allí los dos comprobantes.
    */
   public static async uploadReceiptAndCargo(
     student: StudentData,
-    accessToken?: string,
-    webhookUrl?: string
-  ): Promise<{ success: boolean; folderName: string; receiptFileName: string; cargoFileName: string; driveFolderUrl?: string }> {
-    const folderName = `${student.ci.trim()}-${student.nombres.trim()} ${student.apellidos.trim()}`;
+    receiptPdf: Blob,
+    cargoPdf: Blob,
+    idToken: string,
+    signal?: AbortSignal,
+    endpoint = '/api/drive'
+  ): Promise<DriveUploadResult> {
+    const folderName = getStudentDriveFolderName(student);
     const receiptFileName = `Recibo_${folderName}.pdf`;
     const cargoFileName = `Cargo_${folderName}.pdf`;
-    const targetWebhook = webhookUrl || APPS_SCRIPT_WEBHOOK_URL;
 
-    // Método 1: Envío mediante Google Apps Script Webhook (Si está configurado)
-    if (targetWebhook) {
-      try {
-        const payload = {
-          action: 'createFolderAndUpload',
-          rootFolderId: GOOGLE_DRIVE_ROOT_FOLDER_ID,
-          folderName: folderName,
-          student: student,
-          receiptFileName,
-          cargoFileName,
-        };
-
-        const res = await fetch(targetWebhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          try {
-            const result = await res.json();
-            return {
-              success: true,
-              folderName,
-              receiptFileName,
-              cargoFileName,
-              driveFolderUrl: result.folderUrl || GOOGLE_DRIVE_ROOT_URL,
-            };
-          } catch {
-            // Apps Script ejecutó la creación con éxito
-            return {
-              success: true,
-              folderName,
-              receiptFileName,
-              cargoFileName,
-              driveFolderUrl: GOOGLE_DRIVE_ROOT_URL,
-            };
-          }
-        }
-      } catch (err) {
-        console.warn('[Apps Script Webhook] Notificación de ejecución recibida:', err);
-      }
+    if (!student.ci.trim() || !student.nombres.trim() || !student.apellidos.trim()) {
+      throw new Error('CI, nombres y apellidos son obligatorios para localizar el legajo.');
     }
 
-    // Registrar en logs locales de auditoría
-    const logs = JSON.parse(localStorage.getItem(STORAGE_KEY_SYNC_LOGS) || '[]');
-    logs.unshift({
-      timestamp: new Date().toISOString(),
-      studentCI: student.ci,
-      studentName: `${student.nombres} ${student.apellidos}`,
-      parentFolderId: GOOGLE_DRIVE_ROOT_FOLDER_ID,
-      folderName,
-      receiptFileName,
-      cargoFileName,
-      authMethod: targetWebhook ? 'Google Apps Script Webhook REAL' : (accessToken ? 'Cuenta Google' : 'Modo Directo'),
-      status: 'Procesado y Sincronizado en Drive',
+    if (!receiptPdf.size || !cargoPdf.size) {
+      throw new Error('Los comprobantes PDF están vacíos.');
+    }
+
+    if (!idToken) {
+      throw new Error('Conecta una cuenta de Google autorizada antes de subir a Drive.');
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal,
+      body: JSON.stringify({
+        action: 'findFolderAndUpload',
+        folderName,
+        files: [
+          {
+            name: receiptFileName,
+            mimeType: 'application/pdf',
+            base64: await blobToBase64(receiptPdf),
+          },
+          {
+            name: cargoFileName,
+            mimeType: 'application/pdf',
+            base64: await blobToBase64(cargoPdf),
+          },
+        ],
+      }),
     });
-    localStorage.setItem(STORAGE_KEY_SYNC_LOGS, JSON.stringify(logs));
+
+    let result: any;
+    try {
+      result = await response.json();
+    } catch {
+      throw new Error(`La integración con Drive devolvió una respuesta inválida (HTTP ${response.status}).`);
+    }
+
+    if (!response.ok || result.status !== 'success') {
+      throw new Error(result.message || `Google Drive rechazó la operación (HTTP ${response.status}).`);
+    }
+
+    const confirmedFileNames = new Set(
+      Array.isArray(result.files) ? result.files.map((file: any) => file.name) : [],
+    );
+    if (
+      !result.folderId ||
+      !result.folderUrl ||
+      result.folderName !== folderName ||
+      !Array.isArray(result.files) ||
+      result.files.length !== 2 ||
+      result.files.some((file: any) => !file.id || !file.name) ||
+      !confirmedFileNames.has(receiptFileName) ||
+      !confirmedFileNames.has(cargoFileName)
+    ) {
+      throw new Error('Google Drive no confirmó la carpeta exacta y los dos comprobantes.');
+    }
+
+    // El log local es auxiliar: nunca debe convertir una subida confirmada en error.
+    try {
+      const savedLogs = JSON.parse(localStorage.getItem(STORAGE_KEY_SYNC_LOGS) || '[]');
+      const logs = Array.isArray(savedLogs) ? savedLogs : [];
+      logs.unshift({
+        timestamp: new Date().toISOString(),
+        studentCI: student.ci,
+        studentName: `${student.nombres} ${student.apellidos}`,
+        parentFolderId: GOOGLE_DRIVE_ROOT_FOLDER_ID,
+        folderName,
+        receiptFileName,
+        cargoFileName,
+        folderId: result.folderId,
+        fileIds: result.files.map((file: any) => file.id),
+        authMethod: 'Google Apps Script vía Vercel',
+        status: 'Confirmado por Google Drive',
+      });
+      localStorage.setItem(STORAGE_KEY_SYNC_LOGS, JSON.stringify(logs));
+    } catch (error) {
+      console.warn('[Google Drive] No se pudo guardar el log local:', error);
+    }
 
     return {
       success: true,
+      folderId: result.folderId,
       folderName,
+      driveFolderUrl: result.folderUrl,
       receiptFileName,
       cargoFileName,
-      driveFolderUrl: GOOGLE_DRIVE_ROOT_URL,
+      files: result.files,
     };
   }
 }
