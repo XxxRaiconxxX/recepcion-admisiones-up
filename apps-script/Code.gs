@@ -1,6 +1,7 @@
 var ROOT_FOLDER_ID = '1dcqt0rAR0WiQ9ZnoVo9PUSxjt9xrfAA2';
 var WEBHOOK_SECRET_PROPERTY = 'WEBHOOK_SECRET';
 var MAX_FILE_BYTES = 1350000;
+var MAX_ANCESTORS_SCANNED = 100;
 
 function json_(value) {
   return ContentService.createTextOutput(JSON.stringify(value))
@@ -13,12 +14,66 @@ function fail_(code, message) {
   throw error;
 }
 
+function isDescendantOf_(folder, rootFolderId) {
+  var pending = [];
+  var directParents = folder.getParents();
+  while (directParents.hasNext()) {
+    pending.push(directParents.next());
+  }
+
+  var seen = {};
+  var scanned = 0;
+  while (pending.length) {
+    var parent = pending.pop();
+    var parentId = parent.getId();
+    if (parentId === rootFolderId) {
+      return true;
+    }
+    if (seen[parentId]) {
+      continue;
+    }
+
+    seen[parentId] = true;
+    scanned += 1;
+    if (scanned > MAX_ANCESTORS_SCANNED) {
+      fail_(
+        'FOLDER_SEARCH_LIMIT',
+        'La jerarquía de Drive supera el límite seguro de búsqueda.'
+      );
+    }
+
+    var ancestors = parent.getParents();
+    while (ancestors.hasNext()) {
+      pending.push(ancestors.next());
+    }
+  }
+
+  return false;
+}
+
+function findDescendantFoldersByName_(rootFolderId, folderName) {
+  var candidates = DriveApp.getFoldersByName(folderName);
+  var matches = [];
+
+  while (candidates.hasNext()) {
+    var candidate = candidates.next();
+    if (isDescendantOf_(candidate, rootFolderId)) {
+      matches.push(candidate);
+      if (matches.length > 1) {
+        break;
+      }
+    }
+  }
+
+  return matches;
+}
+
 function doGet() {
   try {
     DriveApp.getFolderById(ROOT_FOLDER_ID).getId();
     return json_({
       status: 'success',
-      mode: 'find-existing-folder-only',
+      mode: 'find-existing-descendant-folder-only',
       rootFolderId: ROOT_FOLDER_ID
     });
   } catch (error) {
@@ -106,21 +161,23 @@ function doPost(e) {
     }
 
     var rootFolder = DriveApp.getFolderById(ROOT_FOLDER_ID);
-    var matches = rootFolder.getFoldersByName(folderName);
-    if (!matches.hasNext()) {
+    var matches = findDescendantFoldersByName_(rootFolder.getId(), folderName);
+    if (!matches.length) {
       fail_(
         'FOLDER_NOT_FOUND',
-        'No existe el legajo exacto "' + folderName + '" dentro de la carpeta raíz.'
+        'No existe el legajo exacto "' + folderName +
+          '" en ningún nivel dentro de la carpeta raíz.'
       );
     }
 
-    var targetFolder = matches.next();
-    if (matches.hasNext()) {
+    if (matches.length > 1) {
       fail_(
         'DUPLICATE_FOLDER',
-        'Existe más de una carpeta con el nombre exacto "' + folderName + '".'
+        'Existe más de una carpeta dentro de la raíz con el nombre exacto "' +
+          folderName + '".'
       );
     }
+    var targetFolder = matches[0];
 
     var filePlans = preparedFiles.map(function(prepared) {
       var existingFiles = targetFolder.getFilesByName(prepared.name);

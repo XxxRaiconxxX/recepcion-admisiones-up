@@ -23,7 +23,7 @@ Sistema web integral diseñado para automatizar y acelerar el proceso de recepci
 
 4. **Integración con Google Drive**:
    - Conexión a la carpeta raíz de admisiones (ID: `1dcqt0rAR0WiQ9ZnoVo9PUSxjt9xrfAA2`).
-   - Busca un legajo ya existente mediante coincidencia exacta y sube allí el Recibo y el Cargo en PDF.
+   - Busca un legajo ya existente, incluso dentro de carpetas de asesor y carrera, mediante coincidencia exacta y sube allí el Recibo y el Cargo en PDF.
    - Nunca crea carpetas. Si el legajo no existe o está duplicado, muestra el error y no usa otra ubicación.
    - Los reintentos conservan los archivos del mismo nombre que ya estén en el legajo, sin duplicarlos ni borrarlos.
 
@@ -88,7 +88,7 @@ La variable antigua `VITE_APPS_SCRIPT_WEBHOOK_URL` puede eliminarse después de 
 El contrato es deliberadamente estricto:
 
 - sólo acepta los dos PDF esperados;
-- busca un hijo directo de la raíz cuyo nombre sea exactamente `CI-Nombre Completo Apellidos Completos`;
+- busca en cualquier nivel debajo de la raíz una carpeta cuyo nombre sea exactamente `CI-Nombre Completo Apellidos Completos`;
 - falla si no encuentra el legajo o si encuentra más de uno;
 - exige un ID token real de Google, valida firma, audiencia, emisor y vencimiento contra `VITE_GOOGLE_CLIENT_ID`, y comprueba la cuenta o dominio autorizado;
 - devuelve el ID de la carpeta y los dos IDs de archivo antes de que la interfaz muestre éxito.

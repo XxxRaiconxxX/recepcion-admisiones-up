@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 import { createServer } from 'vite';
 
 const storage = new Map();
@@ -49,10 +50,50 @@ test('la subida solo informa éxito después de confirmar el legajo y ambos PDF'
 
     await t.test('el Apps Script busca el legajo y nunca crea carpetas', async () => {
       const appsScript = await readFile('apps-script/Code.gs', 'utf8');
-      assert.match(appsScript, /rootFolder\.getFoldersByName\(folderName\)/);
+      assert.match(appsScript, /DriveApp\.getFoldersByName\(folderName\)/);
+      assert.match(appsScript, /folder\.getParents\(\)/);
+      assert.match(appsScript, /parentId === rootFolderId/);
       assert.doesNotMatch(appsScript, /\.createFolder\(/);
       assert.match(appsScript, /existingFile\.getMimeType\(\) !== 'application\/pdf'/);
       assert.match(appsScript, /existingFile\.getSize\(\) <= 0/);
+    });
+
+    await t.test('encuentra el legajo anidado y descarta homónimos fuera de la raíz', async () => {
+      const appsScript = await readFile('apps-script/Code.gs', 'utf8');
+      const iterator = (items) => {
+        let index = 0;
+        return {
+          hasNext: () => index < items.length,
+          next: () => items[index++],
+        };
+      };
+      const folder = (id, parents = []) => ({
+        getId: () => id,
+        getParents: () => iterator(parents),
+      });
+
+      const root = folder('root');
+      const advisor = folder('advisor', [root]);
+      const career = folder('career', [advisor]);
+      const nestedStudent = folder('nested-student', [career]);
+      const outsideRoot = folder('outside-root');
+      const unrelatedStudent = folder('unrelated-student', [outsideRoot]);
+      const context = {
+        DriveApp: {
+          getFoldersByName: () => iterator([unrelatedStudent, nestedStudent]),
+        },
+      };
+
+      vm.runInNewContext(appsScript, context);
+      const matches = context.findDescendantFoldersByName_(
+        'root',
+        '5705965-Axel Miguel Fretes Monges',
+      );
+
+      assert.deepEqual(
+        Array.from(matches, (match) => match.getId()),
+        ['nested-student'],
+      );
     });
 
     await t.test('propaga el error aplicativo aunque Apps Script responda HTTP 200', async () => {
