@@ -93,8 +93,8 @@ export class DocumentExporter {
     const previousBodyZoom = document.body.style.getPropertyValue('zoom');
 
     try {
-      // html2pdf monta su lienzo dentro de body; el zoom global de la UI recorta
-      // y, según el navegador, puede dejar en blanco el foreignObject.
+      // html2pdf monta su lienzo dentro de body; el zoom global de la UI
+      // altera las dimensiones A4, por eso se neutraliza durante la captura.
       document.body.style.setProperty('zoom', '1');
       await document.fonts.ready;
 
@@ -105,7 +105,6 @@ export class DocumentExporter {
           html2canvas: {
             scale: 2,
             useCORS: true,
-            foreignObjectRendering: true,
             backgroundColor: '#ffffff',
           },
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },

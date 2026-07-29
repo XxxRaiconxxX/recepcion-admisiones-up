@@ -270,10 +270,10 @@ export const DriveSimulationModal: React.FC<DriveSimulationModalProps> = ({
         aria-hidden="true"
         className="fixed top-0 -left-[10000px] w-[210mm] bg-white pointer-events-none"
       >
-        <div id="drive-receipt-content">
+        <div id="drive-receipt-content" className="pdf-render-root">
           <ReciboPrintTemplate student={uploadStudent} />
         </div>
-        <div id="drive-cargo-content">
+        <div id="drive-cargo-content" className="pdf-render-root">
           <CargoPrintTemplate student={uploadStudent} />
         </div>
       </div>
