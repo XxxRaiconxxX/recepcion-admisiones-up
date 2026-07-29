@@ -9,7 +9,9 @@ import {
   User, 
   Sparkles,
   FileText,
-  UserCheck
+  UserCheck,
+  Syringe,
+  Eye
 } from 'lucide-react';
 import type { StudentData } from '../types/admission';
 import {
@@ -49,16 +51,31 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
     descripcionOtros: '',
     contratoFirmado: true,
 
+    // Requisitos opcionales por defecto para Odontología
+    tarjetaVacunacion: true,
+    pruebaVistaOido: true,
+
     driveSyncStatus: 'idle',
   });
 
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
 
+  const isOdontologia = student.carrera === 'Odontología';
+
   // Nombre formateado de carpeta en Drive: CI-Nombre Completo Apellidos Completos
   const fullDriveFolderName = getStudentDriveFolderName(student);
 
   const handleChange = (field: keyof StudentData, value: any) => {
+    if (field === 'carrera' && value === 'Odontología') {
+      setStudent((prev) => ({
+        ...prev,
+        carrera: value,
+        tarjetaVacunacion: prev.tarjetaVacunacion ?? true,
+        pruebaVistaOido: prev.pruebaVistaOido ?? true,
+      }));
+      return;
+    }
     setStudent((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -108,6 +125,12 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
     if (student.fotosCarnet) docsList.push('FOTO TIPO CARNET 2');
     if (student.antecedentesPoliciales) docsList.push('ANTECEDENTES POLICIALES');
     if (student.fotocopiaCedula) docsList.push('CEDULA FOTOCOPIA AUTENTICADA');
+
+    // Documentos exclusivos para Odontología
+    if (isOdontologia) {
+      if (student.tarjetaVacunacion) docsList.push('TARJETA DE VACUNACIÓN (COPIA)');
+      if (student.pruebaVistaOido) docsList.push('PRUEBA DE VISTA Y OÍDO');
+    }
 
     DocumentExporter.generateCargoWordDocx(student, docsList.join(', '));
   };
@@ -419,6 +442,57 @@ export const ReceptionForm: React.FC<ReceptionFormProps> = ({ userToken, onOpenP
                 <p className="text-[11px] text-slate-500">Contrato entregado por el Asesor</p>
               </div>
             </div>
+
+            {/* CAMPOS ADICIONALES EXCLUSIVOS PARA ODONTOLOGÍA */}
+            {isOdontologia && (
+              <>
+                {/* Doc Especial Odontología 1: Tarjeta de vacunación (copia) */}
+                <div 
+                  onClick={() => toggleDoc('tarjetaVacunacion')}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all flex items-start space-x-3 ${
+                    student.tarjetaVacunacion 
+                      ? 'bg-purple-50 border-purple-300 text-purple-900 shadow-sm' 
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {student.tarjetaVacunacion ? (
+                    <CheckSquare className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="text-xs font-medium">
+                    <p className="font-bold flex items-center gap-1.5 text-purple-950">
+                      <Syringe className="w-3.5 h-3.5 text-purple-600" />
+                      Tarjeta de vacunación (copia) *
+                    </p>
+                    <p className="text-[11px] text-purple-700">Requisito específico Facultad de Odontología</p>
+                  </div>
+                </div>
+
+                {/* Doc Especial Odontología 2: Prueba de vista y Oído */}
+                <div 
+                  onClick={() => toggleDoc('pruebaVistaOido')}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all flex items-start space-x-3 ${
+                    student.pruebaVistaOido 
+                      ? 'bg-purple-50 border-purple-300 text-purple-900 shadow-sm' 
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {student.pruebaVistaOido ? (
+                    <CheckSquare className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="text-xs font-medium">
+                    <p className="font-bold flex items-center gap-1.5 text-purple-950">
+                      <Eye className="w-3.5 h-3.5 text-purple-600" />
+                      Prueba de vista y Oído *
+                    </p>
+                    <p className="text-[11px] text-purple-700">Requisito específico Facultad de Odontología</p>
+                  </div>
+                </div>
+              </>
+            )}
 
           </div>
 

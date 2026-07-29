@@ -7,6 +7,7 @@ interface ReciboPrintTemplateProps {
 
 export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ student }) => {
   const nombreCompleto = `${student.nombres.trim()} ${student.apellidos.trim()}`;
+  const isOdontologia = student.carrera === 'Odontología';
 
   return (
     <div id="print-receipt-content" className="w-full max-w-[210mm] mx-auto bg-white p-8 text-black font-sans text-[12pt] leading-relaxed border border-slate-300 shadow-sm print:border-none print:shadow-none print:p-0">
@@ -102,6 +103,29 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
             Fotocopia Autenticada del Carné de Migraciones - Estudiantes Extranjeros.
           </span>
         </div>
+
+        {/* Campos Condicionales de Odontología */}
+        {isOdontologia && (
+          <>
+            <div className="flex items-start space-x-3">
+              <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.tarjetaVacunacion ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+                {student.tarjetaVacunacion && <span className="pdf-checkbox-check" />}
+              </div>
+              <span className="text-sm font-semibold text-purple-950">
+                Tarjeta de vacunación (copia) - Requisito Facultad de Odontología.
+              </span>
+            </div>
+
+            <div className="flex items-start space-x-3">
+              <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.pruebaVistaOido ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+                {student.pruebaVistaOido && <span className="pdf-checkbox-check" />}
+              </div>
+              <span className="text-sm font-semibold text-purple-950">
+                Prueba de vista y Oído - Examen/Certificado de vista y oído.
+              </span>
+            </div>
+          </>
+        )}
 
         <div className="flex items-start space-x-3">
           <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.otros ? 'bg-slate-900 text-white' : 'bg-white'}`}>

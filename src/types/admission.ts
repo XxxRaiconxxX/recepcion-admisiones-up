@@ -28,6 +28,10 @@ export interface StudentData {
   descripcionOtros: string;
   contratoFirmado: boolean;
 
+  // Requisitos adicionales específicos para Odontología
+  tarjetaVacunacion?: boolean;
+  pruebaVistaOido?: boolean;
+
   // Estado de Integración con Google Drive
   driveFolderId?: string;
   driveFolderPath?: string;
