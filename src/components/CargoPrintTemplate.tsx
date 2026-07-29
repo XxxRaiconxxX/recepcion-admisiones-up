@@ -7,6 +7,7 @@ interface CargoPrintTemplateProps {
 
 export const CargoPrintTemplate: React.FC<CargoPrintTemplateProps> = ({ student }) => {
   const nombreCompleto = `${student.nombres.trim().toUpperCase()} ${student.apellidos.trim().toUpperCase()}`;
+  const isOdontologia = student.carrera === 'Odontología';
 
   // Construcción de la lista en cadena de texto para la columna Documentos (Idéntico a Imagen 2)
   const docsList: string[] = [`CONTRATO ${student.carrera.toUpperCase()}`];
@@ -15,10 +16,17 @@ export const CargoPrintTemplate: React.FC<CargoPrintTemplateProps> = ({ student 
   if (student.antecedentesPoliciales) docsList.push('ANTECEDENTES POLICIALES');
   if (student.fotocopiaCedula) docsList.push('CEDULA FOTOCOPIA AUTENTICADA');
   if (student.carnetMigraciones) docsList.push('CARNÉ MIGRACIONES');
+
+  // Documentos adicionales específicos para Odontología
+  if (isOdontologia) {
+    if (student.tarjetaVacunacion) docsList.push('TARJETA DE VACUNACIÓN (COPIA)');
+    if (student.pruebaVistaOido) docsList.push('PRUEBA DE VISTA Y OÍDO');
+  }
+
   if (student.otros && student.descripcionOtros) docsList.push(student.descripcionOtros.toUpperCase());
 
   return (
-    <div id="print-cargo-content" className="w-full max-w-[210mm] min-h-[270mm] mx-auto bg-white p-8 text-black font-sans text-[11pt] leading-relaxed border border-slate-300 shadow-sm flex flex-col print:border-none print:shadow-none print:p-0">
+    <div id="print-cargo-content" className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-8 text-black font-sans text-[11pt] leading-relaxed border border-slate-300 shadow-lg rounded-sm flex flex-col print:border-none print:shadow-none print:p-0 print:min-h-0">
       
       {/* Encabezado N° Promoción */}
       <div className="text-right font-semibold text-slate-800 text-sm mb-4">
