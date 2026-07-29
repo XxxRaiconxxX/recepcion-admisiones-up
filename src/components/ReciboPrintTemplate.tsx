@@ -12,9 +12,9 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
     <div id="print-receipt-content" className="w-full max-w-[210mm] mx-auto bg-white p-8 text-black font-sans text-[12pt] leading-relaxed border border-slate-300 shadow-sm print:border-none print:shadow-none print:p-0">
       
       {/* Encabezado con Logo y Título Fieles a Imagen 1 */}
-      <div className="flex justify-between items-start border-b-2 border-slate-900 pb-4 mb-6">
-        <div className="flex items-center space-x-3">
-          <div className="w-14 h-14 bg-slate-900 text-white font-bold flex items-center justify-center text-2xl rounded">
+      <div className="flex justify-between items-start gap-6 border-b-2 border-slate-900 pb-4 mb-6">
+        <div className="flex min-w-0 items-center space-x-3">
+          <div className="w-14 h-14 shrink-0 bg-slate-900 text-white font-bold flex items-center justify-center text-2xl rounded">
             UP
           </div>
           <div>
@@ -27,7 +27,7 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
           </div>
         </div>
 
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           <h2 className="text-lg font-bold uppercase tracking-wider text-slate-900">
             RECEPCIÓN DE DOCUMENTOS
           </h2>
@@ -59,8 +59,8 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
       <div className="space-y-3.5 my-6 pl-2">
         
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.certificadoEstudios ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.certificadoEstudios ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.certificadoEstudios ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.certificadoEstudios && <span className="pdf-checkbox-check" />}
           </div>
           <span className="text-sm font-medium">
             Certificados de Estudios - Original Visado por la Supervisión Administrativa.
@@ -68,8 +68,8 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
         </div>
 
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.fotocopiaCedula ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.fotocopiaCedula ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.fotocopiaCedula ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.fotocopiaCedula && <span className="pdf-checkbox-check" />}
           </div>
           <span className="text-sm font-medium">
             Fotocopia del Documento de Identidad Autenticada por Escribanía Paraguaya.
@@ -77,8 +77,8 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
         </div>
 
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.fotosCarnet ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.fotosCarnet ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.fotosCarnet ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.fotosCarnet && <span className="pdf-checkbox-check" />}
           </div>
           <span className="text-sm font-medium">
             2 Fotografías Tamaño Carné.
@@ -86,8 +86,8 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
         </div>
 
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.antecedentesPoliciales ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.antecedentesPoliciales ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.antecedentesPoliciales ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.antecedentesPoliciales && <span className="pdf-checkbox-check" />}
           </div>
           <span className="text-sm font-medium">
             Certificado de Antecedentes Policiales - Original.
@@ -95,8 +95,8 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
         </div>
 
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.carnetMigraciones ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.carnetMigraciones ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.carnetMigraciones ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.carnetMigraciones && <span className="pdf-checkbox-check" />}
           </div>
           <span className="text-sm font-medium">
             Fotocopia Autenticada del Carné de Migraciones - Estudiantes Extranjeros.
@@ -104,12 +104,12 @@ export const ReciboPrintTemplate: React.FC<ReciboPrintTemplateProps> = ({ studen
         </div>
 
         <div className="flex items-start space-x-3">
-          <div className={`w-5 h-5 border-2 border-slate-900 flex items-center justify-center font-bold text-sm ${student.otros ? 'bg-slate-900 text-white' : 'bg-white'}`}>
-            {student.otros ? '✓' : ''}
+          <div className={`w-5 h-5 shrink-0 mt-0.5 border-2 border-slate-900 flex items-center justify-center font-bold text-[12px] leading-none ${student.otros ? 'bg-slate-900 text-white' : 'bg-white'}`}>
+            {student.otros && <span className="pdf-checkbox-check" />}
           </div>
-          <div className="flex-1 min-w-0 overflow-hidden text-sm font-medium flex items-center gap-2">
+          <div className="flex-1 min-w-0 h-5 leading-5 text-sm font-medium flex items-center gap-2">
             <span>Otros:</span>
-            <span className="border-b border-dotted border-slate-700 flex-1 min-w-0 overflow-hidden whitespace-nowrap px-2 font-mono">
+            <span className="h-5 border-b border-dotted border-slate-700 flex-1 min-w-0 overflow-hidden whitespace-nowrap px-2 font-mono">
               {student.descripcionOtros || '\u00A0'}
             </span>
           </div>
