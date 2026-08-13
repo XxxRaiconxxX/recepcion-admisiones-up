@@ -5,6 +5,8 @@ export interface ExtractedContractData {
   carrera: string;
   rawText: string;
   confidence: number;
+  bestRotationDegrees: number;
+  processedImageUrl?: string;
 }
 
 const KNOWN_CARRERAS = [
@@ -47,9 +49,12 @@ export class OcrService {
   }
 
   /**
-   * Pre-procesa la imagen en un Canvas HTML5 para optimizar el contraste del texto en contratos
+   * Rota una imagen en Canvas por un ángulo determinado (0, 90, 180, 270 grados)
    */
-  public static async preprocessImage(imageSource: string | File | Blob): Promise<string> {
+  public static async rotateImage(
+    imageSource: string | File | Blob,
+    degrees: number
+  ): Promise<string> {
     return new Promise((resolve) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -63,25 +68,86 @@ export class OcrService {
           return;
         }
 
-        // Escalar manteniendo proporción para óptimo rendimiento OCR
-        const maxWidth = 2200;
-        let width = img.width;
-        let height = img.height;
+        const normalizedDeg = ((degrees % 360) + 360) % 360;
 
-        if (width > maxWidth) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
+        if (normalizedDeg === 90 || normalizedDeg === 270) {
+          canvas.width = img.height;
+          canvas.height = img.width;
+        } else {
+          canvas.width = img.width;
+          canvas.height = img.height;
         }
 
-        canvas.width = width;
-        canvas.height = height;
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((normalizedDeg * Math.PI) / 180);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
 
-        // Dibujar original
-        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      };
+
+      img.onerror = () => {
+        resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
+      };
+
+      if (typeof imageSource === 'string') {
+        img.src = imageSource;
+      } else {
+        img.src = URL.createObjectURL(imageSource);
+      }
+    });
+  }
+
+  /**
+   * Pre-procesa la imagen en un Canvas HTML5 (rotación opcional, contraste, nitidez)
+   */
+  public static async preprocessImage(
+    imageSource: string | File | Blob,
+    rotationDeg = 0
+  ): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
+          return;
+        }
+
+        const normalizedDeg = ((rotationDeg % 360) + 360) % 360;
+        const isSideways = normalizedDeg === 90 || normalizedDeg === 270;
+
+        let srcWidth = isSideways ? img.height : img.width;
+        let srcHeight = isSideways ? img.width : img.height;
+
+        // Escalar manteniendo proporción para óptimo rendimiento OCR
+        const maxWidth = 2200;
+        if (srcWidth > maxWidth) {
+          srcHeight = Math.round((srcHeight * maxWidth) / srcWidth);
+          srcWidth = maxWidth;
+        }
+
+        canvas.width = srcWidth;
+        canvas.height = srcHeight;
+
+        // Aplicar transformación y rotación
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((normalizedDeg * Math.PI) / 180);
+
+        if (isSideways) {
+          ctx.drawImage(img, -srcHeight / 2, -srcWidth / 2, srcHeight, srcWidth);
+        } else {
+          ctx.drawImage(img, -srcWidth / 2, -srcHeight / 2, srcWidth, srcHeight);
+        }
+        ctx.restore();
 
         // Obtener píxeles para escala de grises y aumento de contraste
         try {
-          const imageData = ctx.getImageData(0, 0, width, height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
 
           for (let i = 0; i < data.length; i += 4) {
@@ -93,7 +159,7 @@ export class OcrService {
             let gray = 0.299 * r + 0.587 * g + 0.114 * b;
 
             // Filtro de contraste pronunciado (contrast boost)
-            const contrast = 1.35;
+            const contrast = 1.4;
             gray = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
             gray = Math.max(0, Math.min(255, gray));
 
@@ -129,46 +195,79 @@ export class OcrService {
   }
 
   /**
-   * Ejecuta el OCR en una foto y analiza el texto del contrato
+   * Ejecuta el OCR en una foto con detección automática de orientación (0°, 90°, 270°, 180°)
    */
   public static async processContractPhoto(
     imageSource: string | File | Blob,
+    manualRotation = 0,
     onProgress?: (p: number) => void
   ): Promise<ExtractedContractData> {
     const worker = await this.getWorker();
 
-    // Optimizar imagen
-    const processedUrl = await this.preprocessImage(imageSource);
-
+    // 1. Probar primero con la rotación manual (o 0° por defecto)
+    const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation);
     if (onProgress) onProgress(0.3);
 
-    // Reconocimiento OCR con Tesseract
-    const result = await worker.recognize(processedUrl);
-    const rawText = result.data.text || '';
-    const confidence = result.data.confidence || 0;
+    const initialResult = await worker.recognize(initialProcessedUrl);
+    let bestRawText = initialResult.data.text || '';
+    let bestConfidence = initialResult.data.confidence || 0;
+    let bestRotation = manualRotation;
+    let bestProcessedUrl = initialProcessedUrl;
+
+    let parsed = this.parseContractText(bestRawText);
+
+    // 2. Si la foto vino de costado (texto garabateado o no se detectó el alumno/universidad),
+    // probar rotaciones automáticas de 90°, 270° y 180°
+    if (
+      manualRotation === 0 &&
+      (parsed.nombresApellidos === 'ALUMNO POR CONFIRMAR' || !this.hasRecognizableContractWords(bestRawText))
+    ) {
+      const testAngles = [90, 270, 180];
+      for (const angle of testAngles) {
+        const candidateUrl = await this.preprocessImage(imageSource, angle);
+        const res = await worker.recognize(candidateUrl);
+        const candidateText = res.data.text || '';
+        const candidateParsed = this.parseContractText(candidateText);
+
+        if (
+          candidateParsed.nombresApellidos !== 'ALUMNO POR CONFIRMAR' ||
+          this.hasRecognizableContractWords(candidateText)
+        ) {
+          bestRawText = candidateText;
+          bestConfidence = res.data.confidence || 0;
+          bestRotation = angle;
+          bestProcessedUrl = candidateUrl;
+          parsed = candidateParsed;
+          break;
+        }
+      }
+    }
 
     if (onProgress) onProgress(0.9);
-
-    // Extracción inteligente de Carrera y Alumno
-    const parsed = this.parseContractText(rawText);
 
     return {
       nombresApellidos: parsed.nombresApellidos,
       carrera: parsed.carrera,
-      rawText,
-      confidence
+      rawText: bestRawText,
+      confidence: bestConfidence,
+      bestRotationDegrees: bestRotation,
+      processedImageUrl: bestProcessedUrl
     };
   }
 
   /**
-   * Algoritmo heurístico para detectar Nombre del Alumno y Carrera
+   * Comprueba si el texto contiene palabras clave típicas de un contrato UP
+   */
+  private static hasRecognizableContractWords(text: string): boolean {
+    const upper = text.toUpperCase();
+    const keywords = ['PACIFICO', 'PACÍFICO', 'CONTRATO', 'MATRICULA', 'MATRÍCULA', 'NOMBRES', 'APELLIDOS', 'CARRERA', 'MEDICINA', 'ODONTOLOGIA', 'UNIVERSIDAD'];
+    return keywords.filter((k) => upper.includes(k)).length >= 2;
+  }
+
+  /**
+   * Algoritmo heurístico para detectar Nombre del Alumno (Nombres + Apellidos) y Carrera
    */
   public static parseContractText(text: string): { nombresApellidos: string; carrera: string } {
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 2);
-
     // 1. Detectar Carrera
     let detectedCarrera = 'Medicina';
     const textLower = text.toLowerCase();
@@ -183,54 +282,81 @@ export class OcrService {
       }
     }
 
-    // 2. Detectar Nombre y Apellido
+    // 2. Extracción específica de pares clave-valor de contratos UP:
+    // "Nombres: KIARA LIBETH" y "Apellidos: TRINIDAD ARIAS" y "Carrera: MEDICINA"
+    let extractedNombres = '';
+    let extractedApellidos = '';
+
+    // Patrón 1: Nombres: [VALOR]
+    const nombresRegex = /Nombres?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Apellidos?|Carrera|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio)|\n|$)/i;
+    const matchNombres = text.match(nombresRegex);
+    if (matchNombres && matchNombres[1]) {
+      extractedNombres = this.cleanNameCandidate(matchNombres[1]);
+    }
+
+    // Patrón 2: Apellidos: [VALOR]
+    const apellidosRegex = /Apellidos?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Carrera|Nombres?|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio)|\n|$)/i;
+    const matchApellidos = text.match(apellidosRegex);
+    if (matchApellidos && matchApellidos[1]) {
+      extractedApellidos = this.cleanNameCandidate(matchApellidos[1]);
+    }
+
     let detectedName = '';
+    if (extractedNombres && extractedApellidos) {
+      detectedName = `${extractedNombres} ${extractedApellidos}`;
+    } else if (extractedNombres) {
+      detectedName = extractedNombres;
+    } else if (extractedApellidos) {
+      detectedName = extractedApellidos;
+    }
 
-    // Patrones de prefijos de nombres
-    const namePrefixes = [
-      /^(?:alumno|estudiante|postulante|contratante|don\/doña|don|doña|titular)\s*[:.-]?\s*(.+)$/i,
-      /^(?:nombres?\s*y\s*apellidos?|nombre\s*completo)\s*[:.-]?\s*(.+)$/i,
-    ];
+    // 3. Si no encontró pares explícitos Nombres/Apellidos, buscar líneas con prefijos
+    if (!detectedName) {
+      const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 2);
 
-    // Buscar primero línea por línea con prefijo
-    for (const line of lines) {
-      for (const prefix of namePrefixes) {
-        const match = line.match(prefix);
-        if (match && match[1]) {
-          const candidate = this.cleanNameCandidate(match[1]);
-          if (candidate.length >= 5) {
-            detectedName = candidate;
-            break;
+      const namePrefixes = [
+        /^(?:alumno|estudiante|postulante|contratante|don\/doña|don|doña|titular)\s*[:.-]?\s*(.+)$/i,
+        /^(?:nombres?\s*y\s*apellidos?|nombre\s*completo)\s*[:.-]?\s*(.+)$/i,
+      ];
+
+      for (const line of lines) {
+        for (const prefix of namePrefixes) {
+          const match = line.match(prefix);
+          if (match && match[1]) {
+            const candidate = this.cleanNameCandidate(match[1]);
+            if (candidate.length >= 5) {
+              detectedName = candidate;
+              break;
+            }
           }
         }
-      }
-      if (detectedName) break;
-    }
-
-    // Si no encontró por línea directa, probar patrón general
-    if (!detectedName) {
-      const generalPattern = /(?:alumno|estudiante|postulante|contratante|don\/doña|don|doña)\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]{5,40})/i;
-      const match = text.match(generalPattern);
-      if (match && match[1]) {
-        detectedName = this.cleanNameCandidate(match[1]);
+        if (detectedName) break;
       }
     }
 
-    // Si no encontró por patrón directo, buscar líneas en mayúsculas que parezcan nombres completos
+    // 4. Si aún no encontró, buscar líneas en mayúsculas que parezcan nombres
     if (!detectedName) {
       const excludedWords = [
         'UNIVERSIDAD', 'PACIFICO', 'PACÍFICO', 'CONTRATO', 'PRESTACION', 'PRESTACIÓN', 'SERVICIOS',
         'EDUCATIVOS', 'ASUNCION', 'ASUNCIÓN', 'PARAGUAY', 'FACULTAD', 'ADMISION', 'ADMISIÓN', 'GRADO',
         'PROMOCION', 'PROMOCIÓN', 'RECTORADO', 'SECRETARIA', 'SECRETARÍA', 'PRIMERA', 'SEGUNDA', 'CLAUSULA',
         'CLÁUSULA', 'VALOR', 'GUARANIES', 'GUARANÍES', 'MATRICULA', 'MATRÍCULA', 'CUOTA', 'FECHA', 'FIRMA',
-        'CEDULA', 'CÉDULA', 'CIENCIAS', 'SALUD', 'DERECHO', 'MEDICINA', 'ODONTOLOGIA', 'ODONTOLOGÍA', 'SOCIALES'
+        'CEDULA', 'CÉDULA', 'CIENCIAS', 'SALUD', 'DERECHO', 'MEDICINA', 'ODONTOLOGIA', 'ODONTOLOGÍA', 'SOCIALES',
+        'BECADO', 'REPUBLICA', 'REPÚBLICA', 'TITULO', 'TÍTULO', 'DOMICILIO', 'ESTADO', 'CIVIL'
       ];
+
+      const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 2);
 
       for (const line of lines) {
         const lineUpper = line.toUpperCase();
         const words = lineUpper.split(/\s+/).filter((w) => w.length > 1);
 
-        // Nombres tienen típicamente 2 a 5 palabras, solo letras
         if (words.length >= 2 && words.length <= 5 && /^[A-ZÁÉÍÓÚÑ\s]+$/.test(lineUpper)) {
           const hasExcluded = words.some((w) => excludedWords.includes(w));
           if (!hasExcluded && lineUpper.length >= 8) {
@@ -251,9 +377,8 @@ export class OcrService {
    * Limpia y formatea el nombre extraído cortando palabras clave posteriores
    */
   private static cleanNameCandidate(candidate: string): string {
-    // Cortar en palabras como inscripto, con ci, carrera, etc.
     const cutPatterns = [
-      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa])\b.*/i,
+      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título)\b.*/i,
       /[\d,;:_()/*#]/g
     ];
 

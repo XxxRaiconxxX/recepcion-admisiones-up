@@ -14,7 +14,9 @@ import {
   Image as ImageIcon,
   CheckSquare,
   Square,
-  FileText
+  FileText,
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
 import type { BatchCargoData, BatchCargoStudent, OcrProgress } from '../types/batchCargo';
 import { OcrService } from '../lib/ocrService';
@@ -59,7 +61,7 @@ export const BatchCargoSection: React.FC = () => {
   });
 
   // Visor de foto ampliada
-  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
+  const [selectedPhotoStudent, setSelectedPhotoStudent] = useState<BatchCargoStudent | null>(null);
 
   // Modal de Vista Previa A4 / Impresión / Word
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
@@ -74,6 +76,7 @@ export const BatchCargoSection: React.FC = () => {
       file,
       photoUrl: URL.createObjectURL(file),
       photoName: file.name,
+      rotationDegrees: 0,
       nombresApellidos: 'PROCESANDO CONTRATO...',
       carrera: 'Medicina',
       documentos: ['CONTRATO MEDICINA'],
@@ -121,7 +124,10 @@ export const BatchCargoSection: React.FC = () => {
       try {
         if (!item.file) throw new Error('Archivo no disponible');
 
-        const extracted = await OcrService.processContractPhoto(item.file);
+        const extracted = await OcrService.processContractPhoto(
+          item.file,
+          item.rotationDegrees || 0
+        );
 
         setStudents((prev) =>
           prev.map((s) =>
@@ -133,6 +139,8 @@ export const BatchCargoSection: React.FC = () => {
                   documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
                   confidence: extracted.confidence,
                   rawText: extracted.rawText,
+                  rotationDegrees: extracted.bestRotationDegrees,
+                  photoUrl: extracted.processedImageUrl || s.photoUrl,
                   status: 'success'
                 }
               : s
@@ -157,13 +165,64 @@ export const BatchCargoSection: React.FC = () => {
     setOcrProgress((prev) => ({ ...prev, status: 'completed' }));
   };
 
+  // Re-procesar OCR en un alumno individual con una rotación específica
+  const handleRotateAndReprocess = async (studentId: string, deltaDegrees: number) => {
+    const student = students.find((s) => s.id === studentId);
+    if (!student || !student.file) return;
+
+    const newDegrees = (((student.rotationDegrees || 0) + deltaDegrees) % 360 + 360) % 360;
+
+    // Actualizar estado a processing
+    setStudents((prev) =>
+      prev.map((s) => (s.id === studentId ? { ...s, status: 'processing', rotationDegrees: newDegrees } : s))
+    );
+
+    try {
+      const extracted = await OcrService.processContractPhoto(student.file, newDegrees);
+
+      setStudents((prev) =>
+        prev.map((s) =>
+          s.id === studentId
+            ? {
+                ...s,
+                nombresApellidos: extracted.nombresApellidos,
+                carrera: extracted.carrera,
+                documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
+                confidence: extracted.confidence,
+                rawText: extracted.rawText,
+                rotationDegrees: newDegrees,
+                photoUrl: extracted.processedImageUrl || s.photoUrl,
+                status: 'success'
+              }
+            : s
+        )
+      );
+
+      // Si el modal de foto ampliada está abierto, actualizar su vista
+      if (selectedPhotoStudent && selectedPhotoStudent.id === studentId) {
+        setSelectedPhotoStudent((prev) =>
+          prev
+            ? {
+                ...prev,
+                photoUrl: extracted.processedImageUrl || prev.photoUrl,
+                rotationDegrees: newDegrees
+              }
+            : null
+        );
+      }
+    } catch {
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? { ...s, status: 'error' } : s))
+      );
+    }
+  };
+
   // Actualizar un campo de un estudiante
   const updateStudentField = (id: string, field: keyof BatchCargoStudent, value: any) => {
     setStudents((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s;
         if (field === 'carrera') {
-          // Si cambia la carrera, actualizar también el nombre del contrato si solo tenía el contrato base
           const newDoc = `CONTRATO ${String(value).toUpperCase()}`;
           const updatedDocs = s.documentos.map((d) => (d.startsWith('CONTRATO') ? newDoc : d));
           return { ...s, carrera: value, documentos: updatedDocs };
@@ -198,6 +257,7 @@ export const BatchCargoSection: React.FC = () => {
       id: `manual_${Date.now()}`,
       photoName: 'Entrada Manual',
       photoUrl: '',
+      rotationDegrees: 0,
       nombresApellidos: '',
       carrera: 'Medicina',
       documentos: ['CONTRATO MEDICINA'],
@@ -295,7 +355,6 @@ export const BatchCargoSection: React.FC = () => {
               value={header.observacionGlobal}
               onChange={(e) => {
                 setHeader({ ...header, observacionGlobal: e.target.value });
-                // Actualizar a los que tienen la observación previa
                 setStudents((prev) => prev.map((s) => ({ ...s, observacion: e.target.value })));
               }}
               className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-semibold focus:border-blue-500 outline-none"
@@ -327,7 +386,7 @@ export const BatchCargoSection: React.FC = () => {
               Sube o Arrastra las Fotos de los Contratos
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Puedes seleccionar de 1 a 50+ fotos a la vez (JPG, PNG, WEBP). El OCR procesará cada una en tu navegador.
+              Puedes seleccionar de 1 a 50+ fotos a la vez (JPG, PNG, WEBP). Incluye auto-detección y rotación para fotos de costado.
             </p>
           </div>
 
@@ -372,21 +431,21 @@ export const BatchCargoSection: React.FC = () => {
                 Alumnos en este Cargo de Entrega ({students.length})
               </h3>
               <p className="text-xs text-slate-500">
-                Verifica los nombres y carreras extraídos. Puedes editar directamente en la tabla o agregar documentos extras.
+                Verifica los nombres y carreras extraídos. Si una foto vino de costado, usa los botones ⟲ / ⟳ para girar y auto-reprocesar.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 onClick={handleAddManualRow}
-                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-slate-300"
+                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-slate-300 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" /> Agregar Fila
               </button>
 
               <button
                 onClick={() => setStudents([])}
-                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all border border-red-200"
+                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all border border-red-200 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" /> Limpiar Todo
               </button>
@@ -398,8 +457,8 @@ export const BatchCargoSection: React.FC = () => {
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px] border-b border-slate-200">
-                  <th className="py-2.5 px-3 w-12 text-center">N°</th>
-                  <th className="py-2.5 px-3 w-16 text-center">Foto</th>
+                  <th className="py-2.5 px-3 w-10 text-center">N°</th>
+                  <th className="py-2.5 px-3 w-28 text-center">Foto / Girar</th>
                   <th className="py-2.5 px-3">Nombres y Apellidos *</th>
                   <th className="py-2.5 px-3 w-48">Carrera *</th>
                   <th className="py-2.5 px-3">Documentos Entregados</th>
@@ -418,23 +477,41 @@ export const BatchCargoSection: React.FC = () => {
                         {idx + 1}
                       </td>
 
-                      {/* Miniatura de la Foto con botón para ampliar */}
+                      {/* Miniatura de la Foto con controles de rotación */}
                       <td className="py-2.5 px-3 text-center">
                         {student.photoUrl ? (
-                          <button
-                            onClick={() => setSelectedPhotoUrl(student.photoUrl)}
-                            className="w-10 h-10 rounded-lg overflow-hidden border border-slate-300 hover:border-blue-500 shadow-sm relative group cursor-pointer"
-                            title="Clic para ver foto ampliada"
-                          >
-                            <img
-                              src={student.photoUrl}
-                              alt="Contrato"
-                              className="w-full h-full object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
-                              <Eye className="w-3.5 h-3.5" />
-                            </div>
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleRotateAndReprocess(student.id, -90)}
+                              className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
+                              title="Girar 90° Izquierda y Re-escanear"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => setSelectedPhotoStudent(student)}
+                              className="w-10 h-10 rounded-lg overflow-hidden border border-slate-300 hover:border-blue-500 shadow-sm relative group cursor-pointer shrink-0"
+                              title="Clic para ver foto ampliada"
+                            >
+                              <img
+                                src={student.photoUrl}
+                                alt="Contrato"
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                <Eye className="w-3.5 h-3.5" />
+                              </div>
+                            </button>
+
+                            <button
+                              onClick={() => handleRotateAndReprocess(student.id, 90)}
+                              className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
+                              title="Girar 90° Derecha y Re-escanear"
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-slate-400 font-mono text-[10px]">-</span>
                         )}
@@ -450,11 +527,11 @@ export const BatchCargoSection: React.FC = () => {
                               updateStudentField(student.id, 'nombresApellidos', e.target.value.toUpperCase())
                             }
                             className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-bold text-xs text-slate-900 focus:ring-2 focus:ring-blue-600 outline-none"
-                            placeholder="EJ: LUZ JOHANA RIVEROS CABRERA"
+                            placeholder="EJ: KIARA LIBETH TRINIDAD ARIAS"
                           />
                           {student.status === 'error' && (
                             <span className="text-[10px] text-red-500 flex items-center gap-1 font-semibold">
-                              <AlertCircle className="w-3 h-3" /> Revisar foto manualmente
+                              <AlertCircle className="w-3 h-3" /> Foto borrosa o de costado. Usa los botones ⟲ / ⟳ para girar.
                             </span>
                           )}
                         </div>
@@ -482,7 +559,7 @@ export const BatchCargoSection: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => toggleStudentDoc(student.id, contratoNombre)}
-                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all ${
+                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all cursor-pointer ${
                               student.documentos.includes(contratoNombre)
                                 ? 'bg-blue-50 border-blue-300 text-blue-800 font-bold'
                                 : 'bg-slate-50 border-slate-200 text-slate-400'
@@ -500,7 +577,7 @@ export const BatchCargoSection: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => toggleStudentDoc(student.id, 'FOTO TIPO CARNET')}
-                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all ${
+                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all cursor-pointer ${
                               student.documentos.includes('FOTO TIPO CARNET')
                                 ? 'bg-indigo-50 border-indigo-300 text-indigo-800 font-bold'
                                 : 'bg-slate-50 border-slate-200 text-slate-400'
@@ -518,7 +595,7 @@ export const BatchCargoSection: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => toggleStudentDoc(student.id, 'CERTIFICADO DE ESTUDIO')}
-                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all ${
+                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all cursor-pointer ${
                               student.documentos.includes('CERTIFICADO DE ESTUDIO')
                                 ? 'bg-emerald-50 border-emerald-300 text-emerald-800 font-bold'
                                 : 'bg-slate-50 border-slate-200 text-slate-400'
@@ -536,7 +613,7 @@ export const BatchCargoSection: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => toggleStudentDoc(student.id, 'CEDULA FOTOCOPIA AUTENTICADA')}
-                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all ${
+                            className={`px-2 py-0.5 rounded-md border flex items-center gap-1 transition-all cursor-pointer ${
                               student.documentos.includes('CEDULA FOTOCOPIA AUTENTICADA')
                                 ? 'bg-amber-50 border-amber-300 text-amber-800 font-bold'
                                 : 'bg-slate-50 border-slate-200 text-slate-400'
@@ -567,7 +644,7 @@ export const BatchCargoSection: React.FC = () => {
                       <td className="py-2.5 px-3 text-center">
                         <button
                           onClick={() => removeStudent(student.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
                           title="Eliminar alumno"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -608,21 +685,49 @@ export const BatchCargoSection: React.FC = () => {
         </div>
       )}
 
-      {/* Modal de Foto Ampliada */}
-      {selectedPhotoUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="relative max-w-3xl max-h-[90vh] bg-slate-900 p-2 rounded-2xl border border-slate-700 overflow-hidden">
-            <button
-              onClick={() => setSelectedPhotoUrl(null)}
-              className="absolute top-4 right-4 z-10 p-2 bg-black/60 text-white rounded-full hover:bg-black"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <img
-              src={selectedPhotoUrl}
-              alt="Foto ampliada del contrato"
-              className="max-h-[85vh] w-auto mx-auto object-contain rounded-xl"
-            />
+      {/* Modal de Foto Ampliada con Controles de Rotación */}
+      {selectedPhotoStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
+          <div className="relative max-w-4xl max-h-[92vh] bg-slate-900 p-4 rounded-2xl border border-slate-700 overflow-hidden flex flex-col items-center gap-3 text-white">
+            <div className="w-full flex items-center justify-between border-b border-slate-800 pb-2">
+              <div>
+                <h4 className="text-sm font-bold text-slate-100">{selectedPhotoStudent.photoName}</h4>
+                <p className="text-xs text-slate-400">
+                  Alumno: <strong>{selectedPhotoStudent.nombresApellidos}</strong> • Carrera: <strong>{selectedPhotoStudent.carrera}</strong>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleRotateAndReprocess(selectedPhotoStudent.id, -90)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center gap-1.5 border border-slate-600 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Girar 90° Izq
+                </button>
+
+                <button
+                  onClick={() => handleRotateAndReprocess(selectedPhotoStudent.id, 90)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center gap-1.5 border border-slate-600 cursor-pointer"
+                >
+                  <RotateCw className="w-3.5 h-3.5" /> Girar 90° Der
+                </button>
+
+                <button
+                  onClick={() => setSelectedPhotoStudent(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[75vh] overflow-auto flex items-center justify-center p-2">
+              <img
+                src={selectedPhotoStudent.photoUrl}
+                alt="Foto ampliada del contrato"
+                className="max-h-[70vh] w-auto mx-auto object-contain rounded-xl shadow-lg border border-slate-800"
+              />
+            </div>
           </div>
         </div>
       )}
