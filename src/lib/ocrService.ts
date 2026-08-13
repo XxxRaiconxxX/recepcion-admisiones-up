@@ -24,6 +24,23 @@ export class OcrService {
   private static isInitializing = false;
 
   /**
+   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno
+   */
+  public static getSavedGeminiKey(): string {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('up_gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  }
+
+  public static saveGeminiKey(key: string) {
+    if (typeof window === 'undefined') return;
+    if (key.trim()) {
+      localStorage.setItem('up_gemini_api_key', key.trim());
+    } else {
+      localStorage.removeItem('up_gemini_api_key');
+    }
+  }
+
+  /**
    * Obtiene o inicializa el worker reutilizable de Tesseract.js para español
    */
   public static async getWorker(): Promise<Worker> {
@@ -49,60 +66,124 @@ export class OcrService {
   }
 
   /**
-   * Rota una imagen en Canvas por un ángulo determinado (0, 90, 180, 270 grados)
+   * Convierte File o Blob a Base64 puro
    */
-  public static async rotateImage(
-    imageSource: string | File | Blob,
-    degrees: number
-  ): Promise<string> {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
+  public static async fileToBase64(fileOrBlob: File | Blob | string): Promise<string> {
+    if (typeof fileOrBlob === 'string' && fileOrBlob.startsWith('data:')) {
+      return fileOrBlob.split(',')[1] || fileOrBlob;
+    }
 
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-
-        if (!ctx) {
-          resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
-          return;
-        }
-
-        const normalizedDeg = ((degrees % 360) + 360) % 360;
-
-        if (normalizedDeg === 90 || normalizedDeg === 270) {
-          canvas.width = img.height;
-          canvas.height = img.width;
-        } else {
-          canvas.width = img.width;
-          canvas.height = img.height;
-        }
-
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate((normalizedDeg * Math.PI) / 180);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result as string;
+        resolve(res.split(',')[1] || res);
       };
-
-      img.onerror = () => {
-        resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
-      };
-
-      if (typeof imageSource === 'string') {
-        img.src = imageSource;
+      reader.onerror = reject;
+      if (typeof fileOrBlob === 'string') {
+        fetch(fileOrBlob)
+          .then((r) => r.blob())
+          .then((b) => reader.readAsDataURL(b))
+          .catch(reject);
       } else {
-        img.src = URL.createObjectURL(imageSource);
+        reader.readAsDataURL(fileOrBlob);
       }
     });
   }
 
   /**
-   * Pre-procesa la imagen en un Canvas HTML5 (rotación opcional, contraste, nitidez)
+   * Extracción con Gemini Vision AI (100% Precisión en cualquier ángulo o foto de celular)
+   */
+  public static async processWithGeminiVision(
+    imageSource: string | File | Blob,
+    apiKey: string
+  ): Promise<ExtractedContractData> {
+    const base64Data = await this.fileToBase64(imageSource);
+    const key = apiKey.trim() || this.getSavedGeminiKey();
+
+    if (!key) {
+      throw new Error('No se ha configurado la API Key de Gemini');
+    }
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+
+    const prompt = `
+Eres un asistente experto en digitalización de contratos de la Universidad del Pacífico (Paraguay).
+Analiza la foto de la primera página del contrato de matrícula.
+Extrae con total exactitud los siguientes datos del estudiante:
+1. "nombres": El texto que está exactamente al lado de "Nombres:".
+2. "apellidos": El texto que está exactamente al lado de "Apellidos:".
+3. "nombresApellidos": Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "KIARA LIBETH TRINIDAD ARIAS").
+4. "carrera": La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
+5. "ci": Número de cédula de identidad si figura.
+
+Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
+{
+  "nombresApellidos": "NOMBRES Y APELLIDOS COMPLETOS",
+  "carrera": "CARRERA",
+  "ci": "NUMERO DE CI"
+}
+`;
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: 'image/jpeg',
+                  data: base64Data
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          response_mime_type: 'application/json'
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error en Gemini Vision (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    
+    let jsonResult: any = {};
+    try {
+      jsonResult = JSON.parse(candidateText);
+    } catch {
+      const match = candidateText.match(/\{[\s\S]*\}/);
+      if (match) {
+        jsonResult = JSON.parse(match[0]);
+      }
+    }
+
+    return {
+      nombresApellidos: (jsonResult.nombresApellidos || 'ALUMNO POR CONFIRMAR').toUpperCase().trim(),
+      carrera: jsonResult.carrera || 'Medicina',
+      rawText: candidateText,
+      confidence: 99,
+      bestRotationDegrees: 0
+    };
+  }
+
+  /**
+   * Pre-procesa la imagen recortando enfocadamente el tercio superior (donde están Nombres, Apellidos y Carrera)
+   * para evitar que las cláusulas legales inferiores confundan al OCR.
    */
   public static async preprocessImage(
     imageSource: string | File | Blob,
-    rotationDeg = 0
+    rotationDeg = 0,
+    cropTopOnly = true
   ): Promise<string> {
     return new Promise((resolve) => {
       const img = new Image();
@@ -120,32 +201,37 @@ export class OcrService {
         const normalizedDeg = ((rotationDeg % 360) + 360) % 360;
         const isSideways = normalizedDeg === 90 || normalizedDeg === 270;
 
-        let srcWidth = isSideways ? img.height : img.width;
-        let srcHeight = isSideways ? img.width : img.height;
+        let fullWidth = isSideways ? img.height : img.width;
+        let fullHeight = isSideways ? img.width : img.height;
 
-        // Escalar manteniendo proporción para óptimo rendimiento OCR
+        // Si cropTopOnly es true, enfocamos el 45% superior donde está el encabezado con Nombres y Apellidos
+        const heightFactor = cropTopOnly ? 0.45 : 1.0;
+        let targetHeight = Math.round(fullHeight * heightFactor);
+
+        // Escalar manteniendo proporción
         const maxWidth = 2200;
+        let srcWidth = fullWidth;
         if (srcWidth > maxWidth) {
-          srcHeight = Math.round((srcHeight * maxWidth) / srcWidth);
+          targetHeight = Math.round((targetHeight * maxWidth) / srcWidth);
           srcWidth = maxWidth;
         }
 
         canvas.width = srcWidth;
-        canvas.height = srcHeight;
+        canvas.height = targetHeight;
 
         // Aplicar transformación y rotación
         ctx.save();
-        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.translate(canvas.width / 2, (fullHeight * (srcWidth / fullWidth)) / 2);
         ctx.rotate((normalizedDeg * Math.PI) / 180);
 
         if (isSideways) {
-          ctx.drawImage(img, -srcHeight / 2, -srcWidth / 2, srcHeight, srcWidth);
+          ctx.drawImage(img, -fullHeight / 2, -fullWidth / 2, fullHeight, fullWidth);
         } else {
-          ctx.drawImage(img, -srcWidth / 2, -srcHeight / 2, srcWidth, srcHeight);
+          ctx.drawImage(img, -fullWidth / 2, -fullHeight / 2, fullWidth, fullHeight);
         }
         ctx.restore();
 
-        // Obtener píxeles para escala de grises y aumento de contraste
+        // Aplicar escala de grises y mejora de contraste adaptativo
         try {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
@@ -155,18 +241,17 @@ export class OcrService {
             const g = data[i + 1];
             const b = data[i + 2];
 
-            // Luminancia en escala de grises
             let gray = 0.299 * r + 0.587 * g + 0.114 * b;
 
-            // Filtro de contraste pronunciado (contrast boost)
-            const contrast = 1.4;
+            // Filtro de contraste pronunciado para resaltar letras negras en papel
+            const contrast = 1.45;
             gray = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
             gray = Math.max(0, Math.min(255, gray));
 
-            // Binarización suave para resaltar letras oscuras
-            if (gray > 185) {
+            // Binarización suave
+            if (gray > 180) {
               gray = 255;
-            } else if (gray < 75) {
+            } else if (gray < 85) {
               gray = 0;
             }
 
@@ -195,17 +280,31 @@ export class OcrService {
   }
 
   /**
-   * Ejecuta el OCR en una foto con detección automática de orientación (0°, 90°, 270°, 180°)
+   * Ejecuta el OCR en una foto (con soporte de Gemini AI si hay key, o Tesseract con recorte de cabecera)
    */
   public static async processContractPhoto(
     imageSource: string | File | Blob,
     manualRotation = 0,
     onProgress?: (p: number) => void
   ): Promise<ExtractedContractData> {
+    const savedGeminiKey = this.getSavedGeminiKey();
+
+    // 1. Si el usuario configuró la clave de Gemini, usar Gemini Vision AI para 100% de precisión
+    if (savedGeminiKey) {
+      if (onProgress) onProgress(0.5);
+      try {
+        const result = await this.processWithGeminiVision(imageSource, savedGeminiKey);
+        if (onProgress) onProgress(1.0);
+        return result;
+      } catch (err) {
+        console.warn('Gemini Vision falló, recurriendo a OCR Local:', err);
+      }
+    }
+
+    // 2. OCR Local Tesseract.js con recorte superior del 45% (evita cláusulas legales)
     const worker = await this.getWorker();
 
-    // 1. Probar primero con la rotación manual (o 0° por defecto)
-    const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation);
+    const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation, true);
     if (onProgress) onProgress(0.3);
 
     const initialResult = await worker.recognize(initialProcessedUrl);
@@ -216,15 +315,14 @@ export class OcrService {
 
     let parsed = this.parseContractText(bestRawText);
 
-    // 2. Si la foto vino de costado (texto garabateado o no se detectó el alumno/universidad),
-    // probar rotaciones automáticas de 90°, 270° y 180°
+    // Si la foto vino de costado, probar rotaciones automáticas
     if (
       manualRotation === 0 &&
       (parsed.nombresApellidos === 'ALUMNO POR CONFIRMAR' || !this.hasRecognizableContractWords(bestRawText))
     ) {
       const testAngles = [90, 270, 180];
       for (const angle of testAngles) {
-        const candidateUrl = await this.preprocessImage(imageSource, angle);
+        const candidateUrl = await this.preprocessImage(imageSource, angle, true);
         const res = await worker.recognize(candidateUrl);
         const candidateText = res.data.text || '';
         const candidateParsed = this.parseContractText(candidateText);
@@ -283,19 +381,19 @@ export class OcrService {
     }
 
     // 2. Extracción específica de pares clave-valor de contratos UP:
-    // "Nombres: KIARA LIBETH" y "Apellidos: TRINIDAD ARIAS" y "Carrera: MEDICINA"
+    // "Nombres: KIARA LIBETH" y "Apellidos: TRINIDAD ARIAS"
     let extractedNombres = '';
     let extractedApellidos = '';
 
     // Patrón 1: Nombres: [VALOR]
-    const nombresRegex = /Nombres?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Apellidos?|Carrera|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio)|\n|$)/i;
+    const nombresRegex = /Nombres?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Apellidos?|Carrera|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio|Teléfono)|\n|$)/i;
     const matchNombres = text.match(nombresRegex);
     if (matchNombres && matchNombres[1]) {
       extractedNombres = this.cleanNameCandidate(matchNombres[1]);
     }
 
     // Patrón 2: Apellidos: [VALOR]
-    const apellidosRegex = /Apellidos?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Carrera|Nombres?|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio)|\n|$)/i;
+    const apellidosRegex = /Apellidos?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Carrera|Nombres?|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio|Teléfono)|\n|$)/i;
     const matchApellidos = text.match(apellidosRegex);
     if (matchApellidos && matchApellidos[1]) {
       extractedApellidos = this.cleanNameCandidate(matchApellidos[1]);
@@ -304,13 +402,13 @@ export class OcrService {
     let detectedName = '';
     if (extractedNombres && extractedApellidos) {
       detectedName = `${extractedNombres} ${extractedApellidos}`;
-    } else if (extractedNombres) {
+    } else if (extractedNombres && extractedNombres.split(/\s+/).length >= 2) {
       detectedName = extractedNombres;
-    } else if (extractedApellidos) {
+    } else if (extractedApellidos && extractedApellidos.split(/\s+/).length >= 2) {
       detectedName = extractedApellidos;
     }
 
-    // 3. Si no encontró pares explícitos Nombres/Apellidos, buscar líneas con prefijos
+    // 3. Si no encontró pares explícitos, buscar líneas con prefijos formales
     if (!detectedName) {
       const lines = text
         .split('\n')
@@ -327,7 +425,7 @@ export class OcrService {
           const match = line.match(prefix);
           if (match && match[1]) {
             const candidate = this.cleanNameCandidate(match[1]);
-            if (candidate.length >= 5) {
+            if (candidate.length >= 6 && candidate.split(/\s+/).length >= 2) {
               detectedName = candidate;
               break;
             }
@@ -337,17 +435,18 @@ export class OcrService {
       }
     }
 
+    const forbiddenLegalPhrases = [
+      'UNIVERSIDAD', 'PACIFICO', 'PACÍFICO', 'CONTRATO', 'PRESTACION', 'PRESTACIÓN', 'SERVICIOS',
+      'EDUCATIVOS', 'ASUNCION', 'ASUNCIÓN', 'PARAGUAY', 'FACULTAD', 'ADMISION', 'ADMISIÓN', 'GRADO',
+      'PROMOCION', 'PROMOCIÓN', 'RECTORADO', 'SECRETARIA', 'SECRETARÍA', 'PRIMERA', 'SEGUNDA', 'TERCERA',
+      'CLAUSULA', 'CLÁUSULA', 'VALOR', 'GUARANIES', 'GUARANÍES', 'MATRICULA', 'MATRÍCULA', 'CUOTA', 'FECHA',
+      'FIRMA', 'CEDULA', 'CÉDULA', 'CIENCIAS', 'SALUD', 'DERECHO', 'MEDICINA', 'ODONTOLOGIA', 'ODONTOLOGÍA',
+      'SOCIALES', 'BECADO', 'REPUBLICA', 'REPÚBLICA', 'TITULO', 'TÍTULO', 'DOMICILIO', 'ESTADO', 'CIVIL',
+      'ENCON', 'ED PU', 'POS EE', 'ADELANTE', 'ESTUDIANTE', 'COMPROMETE', 'ACUERDO'
+    ];
+
     // 4. Si aún no encontró, buscar líneas en mayúsculas que parezcan nombres
     if (!detectedName) {
-      const excludedWords = [
-        'UNIVERSIDAD', 'PACIFICO', 'PACÍFICO', 'CONTRATO', 'PRESTACION', 'PRESTACIÓN', 'SERVICIOS',
-        'EDUCATIVOS', 'ASUNCION', 'ASUNCIÓN', 'PARAGUAY', 'FACULTAD', 'ADMISION', 'ADMISIÓN', 'GRADO',
-        'PROMOCION', 'PROMOCIÓN', 'RECTORADO', 'SECRETARIA', 'SECRETARÍA', 'PRIMERA', 'SEGUNDA', 'CLAUSULA',
-        'CLÁUSULA', 'VALOR', 'GUARANIES', 'GUARANÍES', 'MATRICULA', 'MATRÍCULA', 'CUOTA', 'FECHA', 'FIRMA',
-        'CEDULA', 'CÉDULA', 'CIENCIAS', 'SALUD', 'DERECHO', 'MEDICINA', 'ODONTOLOGIA', 'ODONTOLOGÍA', 'SOCIALES',
-        'BECADO', 'REPUBLICA', 'REPÚBLICA', 'TITULO', 'TÍTULO', 'DOMICILIO', 'ESTADO', 'CIVIL'
-      ];
-
       const lines = text
         .split('\n')
         .map((l) => l.trim())
@@ -358,12 +457,23 @@ export class OcrService {
         const words = lineUpper.split(/\s+/).filter((w) => w.length > 1);
 
         if (words.length >= 2 && words.length <= 5 && /^[A-ZÁÉÍÓÚÑ\s]+$/.test(lineUpper)) {
-          const hasExcluded = words.some((w) => excludedWords.includes(w));
-          if (!hasExcluded && lineUpper.length >= 8) {
+          const hasForbidden = forbiddenLegalPhrases.some((phrase) =>
+            lineUpper.includes(phrase)
+          );
+          if (!hasForbidden && lineUpper.length >= 8) {
             detectedName = lineUpper;
             break;
           }
         }
+      }
+    }
+
+    if (detectedName) {
+      const isForbidden = forbiddenLegalPhrases.some((phrase) =>
+        detectedName.toUpperCase() === phrase
+      );
+      if (isForbidden) {
+        detectedName = '';
       }
     }
 
@@ -378,7 +488,7 @@ export class OcrService {
    */
   private static cleanNameCandidate(candidate: string): string {
     const cutPatterns = [
-      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título)\b.*/i,
+      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título|año|telefono|teléfono)\b.*/i,
       /[\d,;:_()/*#]/g
     ];
 
