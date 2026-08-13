@@ -1,13 +1,45 @@
 import { createWorker, type Worker } from 'tesseract.js';
+import type { BatchCargoStudent } from '../types/batchCargo';
 
 export interface ExtractedContractData {
   nombresApellidos: string;
   carrera: string;
+  ci?: string;
   rawText: string;
   confidence: number;
   bestRotationDegrees: number;
   processedImageUrl?: string;
 }
+
+export interface BatchItemResult {
+  id: string;
+  index: number;
+  nombresApellidos: string;
+  carrera: string;
+  ci?: string;
+  status: 'success' | 'error';
+  errorMessage?: string;
+  processedImageUrl?: string;
+}
+
+export interface BatchProgressEvent {
+  currentBatch: number;
+  totalBatches: number;
+  completedItems: number;
+  totalItems: number;
+  percentage: number;
+  activeBatchSize: number;
+  message: string;
+}
+
+// Configuración centralizada y fácilmente ajustable
+export const BATCH_CONFIG = {
+  BATCH_SIZE: 6, // 5 a 6 fotos por lote para evitar truncamiento de tokens JSON
+  MAX_CONCURRENCY: 2, // 2 lotes simultáneos (fácilmente reducible a 1 si hay 429)
+  MAX_RETRIES_PER_BATCH: 2, // Intentos de reintento por lote
+  MAX_IMAGE_DIMENSION: 1024, // Lado mayor de imagen en píxeles
+  JPEG_QUALITY: 0.82 // Calidad de compresión para reducir peso manteniendo legibilidad
+};
 
 const KNOWN_CARRERAS = [
   'Medicina',
@@ -24,7 +56,7 @@ export class OcrService {
   private static isInitializing = false;
 
   /**
-   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno (.env / Vercel)
+   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno
    */
   public static getSavedGeminiKey(): string {
     if (typeof window === 'undefined') return '';
@@ -42,6 +74,358 @@ export class OcrService {
     } else {
       localStorage.removeItem('up_gemini_api_key');
     }
+  }
+
+  /**
+   * Redimensiona una imagen con Canvas (lado mayor <= 1024px, JPEG calidad 82%)
+   * Retorna { base64Data, dataUrl } optimizados para Gemini Vision
+   */
+  public static async resizeImageForVision(
+    imageSource: string | File | Blob,
+    maxDimension = BATCH_CONFIG.MAX_IMAGE_DIMENSION,
+    quality = BATCH_CONFIG.JPEG_QUALITY
+  ): Promise<{ base64Data: string; dataUrl: string }> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          reject(new Error('No se pudo inicializar el contexto Canvas para redimensionar'));
+          return;
+        }
+
+        let width = img.width;
+        let height = img.height;
+
+        // Mantener el aspect ratio limitando el lado más largo
+        if (width > height) {
+          if (width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // Dibujar imagen escalada
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const base64Data = dataUrl.split(',')[1] || '';
+
+        resolve({ base64Data, dataUrl });
+      };
+
+      img.onerror = (err) => reject(err);
+
+      if (typeof imageSource === 'string') {
+        img.src = imageSource;
+      } else {
+        img.src = URL.createObjectURL(imageSource);
+      }
+    });
+  }
+
+  /**
+   * Valida estrictamente que la respuesta de Gemini contenga todos los índices 0..N-1 sin faltantes ni repetidos
+   */
+  public static validateStrictBatchIndices(
+    rawResults: any[],
+    expectedLength: number
+  ): { isValid: boolean; parsedList: Array<{ index: number; nombresApellidos: string; carrera: string; ci?: string }> } {
+    if (!Array.isArray(rawResults) || rawResults.length !== expectedLength) {
+      return { isValid: false, parsedList: [] };
+    }
+
+    const seenIndices = new Set<number>();
+    const sanitizedList: Array<{ index: number; nombresApellidos: string; carrera: string; ci?: string }> = [];
+
+    for (let i = 0; i < rawResults.length; i++) {
+      const item = rawResults[i];
+      if (typeof item !== 'object' || item === null) return { isValid: false, parsedList: [] };
+
+      // Permitir índice explícito en el objeto, o inferir por orden posicional si viene ordenado
+      const idx = typeof item.index === 'number' ? item.index : i;
+
+      if (idx < 0 || idx >= expectedLength || seenIndices.has(idx)) {
+        return { isValid: false, parsedList: [] };
+      }
+
+      seenIndices.add(idx);
+
+      sanitizedList.push({
+        index: idx,
+        nombresApellidos: (item.nombresApellidos || '').toUpperCase().trim(),
+        carrera: item.carrera || 'Medicina',
+        ci: item.ci || ''
+      });
+    }
+
+    // Verificar que estén presentes exactamente todos los índices de 0 a expectedLength - 1
+    if (seenIndices.size !== expectedLength) {
+      return { isValid: false, parsedList: [] };
+    }
+
+    // Ordenar por índice para garantizar el mapeo 1:1 con las fotos
+    sanitizedList.sort((a, b) => a.index - b.index);
+
+    return { isValid: true, parsedList: sanitizedList };
+  }
+
+  /**
+   * Procesa un lote individual de fotos (6 a 8 imágenes) en una sola llamada a Gemini con responseSchema estructurado
+   */
+  public static async processSingleBatchWithGemini(
+    batchItems: Array<{ id: string; file?: File; photoUrl: string }>,
+    apiKey: string,
+    attempt = 1
+  ): Promise<BatchItemResult[]> {
+    const key = apiKey.trim() || this.getSavedGeminiKey();
+    if (!key) {
+      throw new Error('No se ha configurado la API Key de Gemini');
+    }
+
+    // 1. Redimensionar en paralelo todas las imágenes del lote a max 1024px JPEG 82%
+    const resizedImages = await Promise.all(
+      batchItems.map(async (item) => {
+        const source = item.file || item.photoUrl;
+        const { base64Data, dataUrl } = await this.resizeImageForVision(source);
+        return { id: item.id, base64Data, dataUrl };
+      })
+    );
+
+    // 2. Construir el prompt estructurado con responseSchema
+    const promptText = `
+Eres un asistente experto en digitalización de contratos de la Universidad del Pacífico (Paraguay).
+Analiza las siguientes ${resizedImages.length} imágenes de contratos de matrícula adjuntas.
+Las imágenes están ordenadas secuencialmente del índice 0 al índice ${resizedImages.length - 1}.
+
+Para CADA imagen debes extraer con total exactitud:
+- index: El número de índice de la imagen correspondiente (0 a ${resizedImages.length - 1}).
+- nombres: El texto exacto al lado de "Nombres:".
+- apellidos: El texto exacto al lado de "Apellidos:".
+- nombresApellidos: Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "KIARA LIBETH TRINIDAD ARIAS").
+- carrera: La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
+- ci: Número de cédula de identidad si figura.
+
+Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los índices de 0 a ${resizedImages.length - 1} sin omitir ninguna imagen.
+`;
+
+    // Empaquetar el prompt + array de inlineData
+    const parts: any[] = [{ text: promptText }];
+    for (const img of resizedImages) {
+      parts.push({
+        inline_data: {
+          mime_type: 'image/jpeg',
+          data: img.base64Data
+        }
+      });
+    }
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+
+    const responseSchema = {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          index: { type: 'INTEGER', description: 'Índice de la imagen del lote (0 a N-1)' },
+          nombres: { type: 'STRING' },
+          apellidos: { type: 'STRING' },
+          nombresApellidos: { type: 'STRING', description: 'Nombres y Apellidos completos' },
+          carrera: { type: 'STRING', description: 'Carrera universitaria' },
+          ci: { type: 'STRING', description: 'Cédula de identidad' }
+        },
+        required: ['index', 'nombresApellidos', 'carrera']
+      }
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.1,
+          response_mime_type: 'application/json',
+          response_schema: responseSchema
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      // Si recibimos 429 (Rate Limit), esperar y reintentar
+      if (response.status === 429 && attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
+        console.warn(`Rate limit 429 en lote. Reintentando intento ${attempt + 1}...`);
+        await new Promise((r) => setTimeout(r, 2500 * attempt));
+        return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
+      }
+      throw new Error(`Gemini Batch API Error (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+
+    let rawList: any[] = [];
+    try {
+      rawList = JSON.parse(candidateText);
+    } catch {
+      const match = candidateText.match(/\[[\s\S]*\]/);
+      if (match) rawList = JSON.parse(match[0]);
+    }
+
+    // 3. Validación estricta de índices 0..N-1
+    const { isValid, parsedList } = this.validateStrictBatchIndices(rawList, batchItems.length);
+
+    if (!isValid) {
+      if (attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
+        console.warn(`Respuesta incompleta o índices inválidos en lote. Reintentando intento ${attempt + 1}...`);
+        await new Promise((r) => setTimeout(r, 1500));
+        return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
+      }
+      throw new Error('La respuesta del lote no contiene todos los índices correspondientes a las imágenes enviadas');
+    }
+
+    // Mapear resultados a los items originales
+    return batchItems.map((item, idx) => {
+      const parsedItem = parsedList[idx];
+      const resized = resizedImages[idx];
+      return {
+        id: item.id,
+        index: idx,
+        nombresApellidos: parsedItem.nombresApellidos || 'ALUMNO POR CONFIRMAR',
+        carrera: parsedItem.carrera || 'Medicina',
+        ci: parsedItem.ci,
+        processedImageUrl: resized?.dataUrl || item.photoUrl,
+        status: 'success'
+      };
+    });
+  }
+
+  /**
+   * Orquesta el procesamiento de todos los contratos en lotes agrupados con concurrencia controlada
+   */
+  public static async processAllContractPhotosInBatches(
+    students: BatchCargoStudent[],
+    onProgress?: (event: BatchProgressEvent) => void,
+    onBatchCompleted?: (batchResults: BatchItemResult[]) => void
+  ): Promise<BatchItemResult[]> {
+    const totalItems = students.length;
+    if (totalItems === 0) return [];
+
+    const apiKey = this.getSavedGeminiKey();
+    const batchSize = BATCH_CONFIG.BATCH_SIZE;
+    const maxConcurrency = BATCH_CONFIG.MAX_CONCURRENCY;
+
+    // 1. Dividir los estudiantes en lotes de tamaño configurable (ej. 6 por lote)
+    const batches: Array<BatchCargoStudent[]> = [];
+    for (let i = 0; i < totalItems; i += batchSize) {
+      batches.push(students.slice(i, i + batchSize));
+    }
+
+    const totalBatches = batches.length;
+    let completedItemsCount = 0;
+    const allResults: BatchItemResult[] = [];
+
+    // 2. Ejecutar lotes con límite de concurrencia (Promise pool de max 2 simultáneos)
+    let currentBatchIdx = 0;
+
+    const runWorker = async () => {
+      while (currentBatchIdx < totalBatches) {
+        const batchIndex = currentBatchIdx++;
+        const batch = batches[batchIndex];
+
+        if (onProgress) {
+          onProgress({
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            completedItems: completedItemsCount,
+            totalItems,
+            percentage: Math.round((completedItemsCount / totalItems) * 100),
+            activeBatchSize: batch.length,
+            message: `Procesando Lote ${batchIndex + 1} de ${totalBatches} (${batch.length} contratos)...`
+          });
+        }
+
+        try {
+          // Intentar procesamiento por lote con Gemini
+          const batchResults = await this.processSingleBatchWithGemini(batch, apiKey);
+          completedItemsCount += batch.length;
+          allResults.push(...batchResults);
+
+          if (onBatchCompleted) {
+            onBatchCompleted(batchResults);
+          }
+        } catch (batchError: any) {
+          console.warn(`Lote ${batchIndex + 1} falló. Activando fallback individual para este lote:`, batchError?.message);
+
+          // Fallback individual para las fotos de este lote fallido
+          const fallbackResults: BatchItemResult[] = [];
+          for (let i = 0; i < batch.length; i++) {
+            const singleItem = batch[i];
+            try {
+              const singleData = await this.processContractPhoto(singleItem.file || singleItem.photoUrl);
+              fallbackResults.push({
+                id: singleItem.id,
+                index: i,
+                nombresApellidos: singleData.nombresApellidos,
+                carrera: singleData.carrera,
+                ci: singleData.ci,
+                processedImageUrl: singleData.processedImageUrl || singleItem.photoUrl,
+                status: 'success'
+              });
+            } catch (err: any) {
+              fallbackResults.push({
+                id: singleItem.id,
+                index: i,
+                nombresApellidos: 'REVISAR MANUALMENTE',
+                carrera: singleItem.carrera || 'Medicina',
+                status: 'error',
+                errorMessage: err?.message || 'Error de lectura'
+              });
+            }
+          }
+
+          completedItemsCount += batch.length;
+          allResults.push(...fallbackResults);
+
+          if (onBatchCompleted) {
+            onBatchCompleted(fallbackResults);
+          }
+        }
+
+        if (onProgress) {
+          onProgress({
+            currentBatch: Math.min(batchIndex + 1, totalBatches),
+            totalBatches,
+            completedItems: completedItemsCount,
+            totalItems,
+            percentage: Math.round((completedItemsCount / totalItems) * 100),
+            activeBatchSize: batch.length,
+            message: completedItemsCount >= totalItems
+              ? 'Procesamiento de todos los lotes completado.'
+              : `Completado lote ${batchIndex + 1} de ${totalBatches}. Continuando...`
+          });
+        }
+      }
+    };
+
+    // Lanzar trabajadores concurrentes
+    const workers = Array.from({ length: Math.min(maxConcurrency, totalBatches) }, () => runWorker());
+    await Promise.all(workers);
+
+    return allResults;
   }
 
   /**
@@ -70,136 +454,7 @@ export class OcrService {
   }
 
   /**
-   * Convierte File o Blob a Base64 puro
-   */
-  public static async fileToBase64(fileOrBlob: File | Blob | string): Promise<string> {
-    if (typeof fileOrBlob === 'string' && fileOrBlob.startsWith('data:')) {
-      return fileOrBlob.split(',')[1] || fileOrBlob;
-    }
-
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const res = reader.result as string;
-        resolve(res.split(',')[1] || res);
-      };
-      reader.onerror = reject;
-      if (typeof fileOrBlob === 'string') {
-        fetch(fileOrBlob)
-          .then((r) => r.blob())
-          .then((b) => reader.readAsDataURL(b))
-          .catch(reject);
-      } else {
-        reader.readAsDataURL(fileOrBlob);
-      }
-    });
-  }
-
-  /**
-   * Extracción con Gemini Vision AI con cascada de modelos (gemini-2.5-flash, gemini-1.5-flash, gemini-2.0-flash)
-   */
-  public static async processWithGeminiVision(
-    imageSource: string | File | Blob,
-    apiKey: string
-  ): Promise<ExtractedContractData> {
-    const base64Data = await this.fileToBase64(imageSource);
-    const key = apiKey.trim() || this.getSavedGeminiKey();
-
-    if (!key) {
-      throw new Error('No se ha configurado la API Key de Gemini');
-    }
-
-    const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
-    let lastError: Error | null = null;
-
-    const prompt = `
-Eres un asistente experto en digitalización de contratos de la Universidad del Pacífico (Paraguay).
-Analiza la foto de la primera página del contrato de matrícula.
-Extrae con total exactitud los siguientes datos del estudiante:
-1. "nombres": El texto que está exactamente al lado de "Nombres:".
-2. "apellidos": El texto que está exactamente al lado de "Apellidos:".
-3. "nombresApellidos": Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "KIARA LIBETH TRINIDAD ARIAS").
-4. "carrera": La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
-5. "ci": Número de cédula de identidad si figura.
-
-Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
-{
-  "nombresApellidos": "NOMBRES Y APELLIDOS COMPLETOS",
-  "carrera": "CARRERA",
-  "ci": "NUMERO DE CI"
-}
-`;
-
-    for (const model of models) {
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  {
-                    inline_data: {
-                      mime_type: 'image/jpeg',
-                      data: base64Data
-                    }
-                  }
-                ]
-              }
-            ],
-            generationConfig: {
-              temperature: 0.1,
-              response_mime_type: 'application/json'
-            }
-          })
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Error en ${model} (${response.status}): ${errorText}`);
-        }
-
-        const data = await response.json();
-        const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        
-        let jsonResult: any = {};
-        try {
-          jsonResult = JSON.parse(candidateText);
-        } catch {
-          const match = candidateText.match(/\{[\s\S]*\}/);
-          if (match) {
-            jsonResult = JSON.parse(match[0]);
-          }
-        }
-
-        const nombresApellidos = (jsonResult.nombresApellidos || '').toUpperCase().trim();
-        const carrera = jsonResult.carrera || 'Medicina';
-
-        if (nombresApellidos && nombresApellidos !== 'ALUMNO POR CONFIRMAR') {
-          return {
-            nombresApellidos,
-            carrera,
-            rawText: candidateText,
-            confidence: 99,
-            bestRotationDegrees: 0
-          };
-        }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Intento con ${model} falló, probando siguiente modelo...`, err?.message);
-      }
-    }
-
-    throw lastError || new Error('No se pudo procesar la imagen con Gemini Vision.');
-  }
-
-  /**
    * Pre-procesa la imagen recortando enfocadamente el tercio superior (donde están Nombres, Apellidos y Carrera)
-   * para evitar que las cláusulas legales inferiores confundan al OCR.
    */
   public static async preprocessImage(
     imageSource: string | File | Blob,
@@ -225,11 +480,9 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
         let fullWidth = isSideways ? img.height : img.width;
         let fullHeight = isSideways ? img.width : img.height;
 
-        // Si cropTopOnly es true, enfocamos el 45% superior donde está el encabezado con Nombres y Apellidos
         const heightFactor = cropTopOnly ? 0.45 : 1.0;
         let targetHeight = Math.round(fullHeight * heightFactor);
 
-        // Escalar manteniendo proporción
         const maxWidth = 2200;
         let srcWidth = fullWidth;
         if (srcWidth > maxWidth) {
@@ -240,7 +493,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
         canvas.width = srcWidth;
         canvas.height = targetHeight;
 
-        // Aplicar transformación y rotación
         ctx.save();
         ctx.translate(canvas.width / 2, (fullHeight * (srcWidth / fullWidth)) / 2);
         ctx.rotate((normalizedDeg * Math.PI) / 180);
@@ -252,7 +504,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
         }
         ctx.restore();
 
-        // Aplicar escala de grises y mejora de contraste adaptativo
         try {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
@@ -263,13 +514,10 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
             const b = data[i + 2];
 
             let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-
-            // Filtro de contraste pronunciado para resaltar letras negras en papel
             const contrast = 1.45;
             gray = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
             gray = Math.max(0, Math.min(255, gray));
 
-            // Binarización suave
             if (gray > 180) {
               gray = 255;
             } else if (gray < 85) {
@@ -301,33 +549,41 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
   }
 
   /**
-   * Ejecuta el OCR en una foto (con soporte de Gemini AI si hay key, o Tesseract con recorte de cabecera)
+   * Procesa una foto individual (usado para re-escaneos o fallback)
    */
   public static async processContractPhoto(
     imageSource: string | File | Blob,
-    manualRotation = 0,
-    onProgress?: (p: number) => void
+    manualRotation = 0
   ): Promise<ExtractedContractData> {
     const savedGeminiKey = this.getSavedGeminiKey();
 
-    // 1. Si el usuario configuró la clave de Gemini, usar Gemini Vision AI para 100% de precisión
     if (savedGeminiKey) {
-      if (onProgress) onProgress(0.5);
       try {
-        const result = await this.processWithGeminiVision(imageSource, savedGeminiKey);
-        if (onProgress) onProgress(1.0);
-        return result;
+        const { dataUrl } = await this.resizeImageForVision(imageSource);
+        const singleBatch = await this.processSingleBatchWithGemini(
+          [{ id: 'single_test', photoUrl: dataUrl }],
+          savedGeminiKey
+        );
+
+        if (singleBatch.length > 0 && singleBatch[0].status === 'success') {
+          return {
+            nombresApellidos: singleBatch[0].nombresApellidos,
+            carrera: singleBatch[0].carrera,
+            ci: singleBatch[0].ci,
+            rawText: JSON.stringify(singleBatch[0]),
+            confidence: 99,
+            bestRotationDegrees: 0,
+            processedImageUrl: singleBatch[0].processedImageUrl
+          };
+        }
       } catch (err) {
-        console.warn('Gemini Vision falló, recurriendo a OCR Local:', err);
+        console.warn('Extracción individual con Gemini falló, recurriendo a OCR Local:', err);
       }
     }
 
-    // 2. OCR Local Tesseract.js con recorte superior del 45% (evita cláusulas legales)
+    // OCR Local Tesseract
     const worker = await this.getWorker();
-
     const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation, true);
-    if (onProgress) onProgress(0.3);
-
     const initialResult = await worker.recognize(initialProcessedUrl);
     let bestRawText = initialResult.data.text || '';
     let bestConfidence = initialResult.data.confidence || 0;
@@ -336,7 +592,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
 
     let parsed = this.parseContractText(bestRawText);
 
-    // Si la foto vino de costado, probar rotaciones automáticas
     if (
       manualRotation === 0 &&
       (parsed.nombresApellidos === 'ALUMNO POR CONFIRMAR' || !this.hasRecognizableContractWords(bestRawText))
@@ -362,8 +617,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
       }
     }
 
-    if (onProgress) onProgress(0.9);
-
     return {
       nombresApellidos: parsed.nombresApellidos,
       carrera: parsed.carrera,
@@ -374,20 +627,13 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
     };
   }
 
-  /**
-   * Comprueba si el texto contiene palabras clave típicas de un contrato UP
-   */
   private static hasRecognizableContractWords(text: string): boolean {
     const upper = text.toUpperCase();
     const keywords = ['PACIFICO', 'PACÍFICO', 'CONTRATO', 'MATRICULA', 'MATRÍCULA', 'NOMBRES', 'APELLIDOS', 'CARRERA', 'MEDICINA', 'ODONTOLOGIA', 'UNIVERSIDAD'];
     return keywords.filter((k) => upper.includes(k)).length >= 2;
   }
 
-  /**
-   * Algoritmo heurístico para detectar Nombre del Alumno (Nombres + Apellidos) y Carrera
-   */
   public static parseContractText(text: string): { nombresApellidos: string; carrera: string } {
-    // 1. Detectar Carrera
     let detectedCarrera = 'Medicina';
     const textLower = text.toLowerCase();
 
@@ -401,19 +647,15 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
       }
     }
 
-    // 2. Extracción específica de pares clave-valor de contratos UP:
-    // "Nombres: KIARA LIBETH" y "Apellidos: TRINIDAD ARIAS"
     let extractedNombres = '';
     let extractedApellidos = '';
 
-    // Patrón 1: Nombres: [VALOR]
     const nombresRegex = /Nombres?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Apellidos?|Carrera|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio|Teléfono)|\n|$)/i;
     const matchNombres = text.match(nombresRegex);
     if (matchNombres && matchNombres[1]) {
       extractedNombres = this.cleanNameCandidate(matchNombres[1]);
     }
 
-    // Patrón 2: Apellidos: [VALOR]
     const apellidosRegex = /Apellidos?\s*[:.-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ\s]+?)(?=\s+(?:Carrera|Nombres?|Fecha|Tipo|Nro|Nacionalidad|Estado|Colegio|Domicilio|Teléfono)|\n|$)/i;
     const matchApellidos = text.match(apellidosRegex);
     if (matchApellidos && matchApellidos[1]) {
@@ -429,7 +671,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
       detectedName = extractedApellidos;
     }
 
-    // 3. Si no encontró pares explícitos, buscar líneas con prefijos formales
     if (!detectedName) {
       const lines = text
         .split('\n')
@@ -466,7 +707,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
       'ENCON', 'ED PU', 'POS EE', 'ADELANTE', 'ESTUDIANTE', 'COMPROMETE', 'ACUERDO'
     ];
 
-    // 4. Si aún no encontró, buscar líneas en mayúsculas que parezcan nombres
     if (!detectedName) {
       const lines = text
         .split('\n')
@@ -504,9 +744,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
     };
   }
 
-  /**
-   * Limpia y formatea el nombre extraído cortando palabras clave posteriores
-   */
   private static cleanNameCandidate(candidate: string): string {
     const cutPatterns = [
       /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título|año|telefono|teléfono)\b.*/i,
@@ -521,9 +758,6 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
     return cleaned;
   }
 
-  /**
-   * Libera la memoria del worker de Tesseract si es necesario
-   */
   public static async terminateWorker() {
     if (this.workerInstance) {
       await this.workerInstance.terminate();

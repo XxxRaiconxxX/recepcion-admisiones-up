@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OcrService } from '../src/lib/ocrService.ts';
+import { OcrService, BATCH_CONFIG } from '../src/lib/ocrService.ts';
 
 test('OcrService parser extrae correctamente nombres y carreras de contratos tipo UP', () => {
   // Caso 1: Contrato real UP con Nombres: [X] Apellidos: [Y] Carrera: [Z] (Idéntico a foto adjunta del usuario)
@@ -53,4 +53,71 @@ test('OcrService parser extrae correctamente nombres y carreras de contratos tip
   const parsed3 = OcrService.parseContractText(rawText3);
   assert.equal(parsed3.nombresApellidos, 'SEBASTIAN BARRESSI ENCISO');
   assert.equal(parsed3.carrera, 'Derecho');
+});
+
+test('OcrService validateStrictBatchIndices valida con precisión la integridad de los lotes', () => {
+  const expectedLength = 4;
+
+  // 1. Lote perfecto con índices 0, 1, 2, 3 en orden
+  const perfectBatch = [
+    { index: 0, nombresApellidos: 'ALUMNO 0', carrera: 'Medicina' },
+    { index: 1, nombresApellidos: 'ALUMNO 1', carrera: 'Medicina' },
+    { index: 2, nombresApellidos: 'ALUMNO 2', carrera: 'Odontología' },
+    { index: 3, nombresApellidos: 'ALUMNO 3', carrera: 'Derecho' },
+  ];
+  const res1 = OcrService.validateStrictBatchIndices(perfectBatch, expectedLength);
+  assert.equal(res1.isValid, true);
+  assert.equal(res1.parsedList.length, 4);
+  assert.equal(res1.parsedList[0].nombresApellidos, 'ALUMNO 0');
+  assert.equal(res1.parsedList[3].nombresApellidos, 'ALUMNO 3');
+
+  // 2. Lote desordenado pero completo (ej. 2, 0, 3, 1) -> debe ordenarse y ser válido
+  const unorderedBatch = [
+    { index: 2, nombresApellidos: 'ALUMNO 2', carrera: 'Odontología' },
+    { index: 0, nombresApellidos: 'ALUMNO 0', carrera: 'Medicina' },
+    { index: 3, nombresApellidos: 'ALUMNO 3', carrera: 'Derecho' },
+    { index: 1, nombresApellidos: 'ALUMNO 1', carrera: 'Medicina' },
+  ];
+  const res2 = OcrService.validateStrictBatchIndices(unorderedBatch, expectedLength);
+  assert.equal(res2.isValid, true);
+  assert.equal(res2.parsedList[0].index, 0);
+  assert.equal(res2.parsedList[3].index, 3);
+
+  // 3. Lote con elemento faltante (longitud 3 en vez de 4) -> debe ser inválido
+  const missingLengthBatch = [
+    { index: 0, nombresApellidos: 'ALUMNO 0', carrera: 'Medicina' },
+    { index: 1, nombresApellidos: 'ALUMNO 1', carrera: 'Medicina' },
+    { index: 2, nombresApellidos: 'ALUMNO 2', carrera: 'Odontología' },
+  ];
+  const res3 = OcrService.validateStrictBatchIndices(missingLengthBatch, expectedLength);
+  assert.equal(res3.isValid, false);
+
+  // 4. Lote con índice duplicado (ej. 0, 1, 1, 3) -> debe ser inválido
+  const duplicateBatch = [
+    { index: 0, nombresApellidos: 'ALUMNO 0', carrera: 'Medicina' },
+    { index: 1, nombresApellidos: 'ALUMNO 1', carrera: 'Medicina' },
+    { index: 1, nombresApellidos: 'ALUMNO 1 DUPLICADO', carrera: 'Medicina' },
+    { index: 3, nombresApellidos: 'ALUMNO 3', carrera: 'Derecho' },
+  ];
+  const res4 = OcrService.validateStrictBatchIndices(duplicateBatch, expectedLength);
+  assert.equal(res4.isValid, false);
+
+  // 5. Lote con índice fuera de rango (ej. índice 4 o 99) -> debe ser inválido
+  const outOfBoundsBatch = [
+    { index: 0, nombresApellidos: 'ALUMNO 0', carrera: 'Medicina' },
+    { index: 1, nombresApellidos: 'ALUMNO 1', carrera: 'Medicina' },
+    { index: 2, nombresApellidos: 'ALUMNO 2', carrera: 'Odontología' },
+    { index: 4, nombresApellidos: 'ALUMNO 4', carrera: 'Derecho' },
+  ];
+  const res5 = OcrService.validateStrictBatchIndices(outOfBoundsBatch, expectedLength);
+  assert.equal(res5.isValid, false);
+});
+
+test('BATCH_CONFIG exporta parámetros de lote y concurrencia ajustables', () => {
+  assert.equal(typeof BATCH_CONFIG.BATCH_SIZE, 'number');
+  assert.equal(typeof BATCH_CONFIG.MAX_CONCURRENCY, 'number');
+  assert.equal(typeof BATCH_CONFIG.MAX_IMAGE_DIMENSION, 'number');
+  assert.equal(BATCH_CONFIG.MAX_IMAGE_DIMENSION, 1024);
+  assert.equal(BATCH_CONFIG.BATCH_SIZE, 6);
+  assert.equal(BATCH_CONFIG.MAX_CONCURRENCY, 2);
 });

@@ -20,8 +20,8 @@ import {
   Key,
   Bot
 } from 'lucide-react';
-import type { BatchCargoData, BatchCargoStudent, OcrProgress } from '../types/batchCargo';
-import { OcrService } from '../lib/ocrService';
+import type { BatchCargoData, BatchCargoStudent } from '../types/batchCargo';
+import { OcrService, BATCH_CONFIG, type BatchProgressEvent } from '../lib/ocrService';
 import { DocumentExporter } from '../lib/pdfExport';
 import { BatchCargoModal } from './BatchCargoModal';
 
@@ -61,13 +61,23 @@ export const BatchCargoSection: React.FC = () => {
   // Lista de alumnos extraídos de las fotos
   const [students, setStudents] = useState<BatchCargoStudent[]>([]);
 
-  // Estado del proceso OCR
-  const [ocrProgress, setOcrProgress] = useState<OcrProgress>({
-    currentIndex: 0,
-    total: 0,
-    currentFileName: '',
+  // Estado del progreso por lotes
+  const [batchProgress, setBatchProgress] = useState<{
+    isActive: boolean;
+    currentBatch: number;
+    totalBatches: number;
+    completedItems: number;
+    totalItems: number;
+    percentage: number;
+    message: string;
+  }>({
+    isActive: false,
+    currentBatch: 0,
+    totalBatches: 0,
+    completedItems: 0,
+    totalItems: 0,
     percentage: 0,
-    status: 'idle'
+    message: ''
   });
 
   // Visor de foto ampliada
@@ -94,7 +104,7 @@ export const BatchCargoSection: React.FC = () => {
       photoUrl: URL.createObjectURL(file),
       photoName: file.name,
       rotationDegrees: 0,
-      nombresApellidos: 'PROCESANDO CONTRATO...',
+      nombresApellidos: 'EN COLA DE PROCESAMIENTO...',
       carrera: 'Medicina',
       documentos: ['CONTRATO MEDICINA'],
       observacion: header.observacionGlobal,
@@ -103,8 +113,8 @@ export const BatchCargoSection: React.FC = () => {
 
     setStudents((prev) => [...prev, ...newStudents]);
 
-    // Iniciar el procesamiento OCR en lote
-    await processBatchOcr(newStudents);
+    // Iniciar procesamiento por lotes con IA
+    await processBatchExecution(newStudents);
 
     // Resetear input file
     if (fileInputRef.current) {
@@ -112,74 +122,58 @@ export const BatchCargoSection: React.FC = () => {
     }
   };
 
-  // Procesar lote de fotos secuencialmente
-  const processBatchOcr = async (itemsToProcess: BatchCargoStudent[]) => {
-    const total = itemsToProcess.length;
-    setOcrProgress({
-      currentIndex: 0,
-      total,
-      currentFileName: '',
+  // Orquestación de procesamiento por lotes (Batching 6 fotos x request, concurrencia 2)
+  const processBatchExecution = async (itemsToProcess: BatchCargoStudent[]) => {
+    if (itemsToProcess.length === 0) return;
+
+    setBatchProgress({
+      isActive: true,
+      currentBatch: 0,
+      totalBatches: Math.ceil(itemsToProcess.length / BATCH_CONFIG.BATCH_SIZE),
+      completedItems: 0,
+      totalItems: itemsToProcess.length,
       percentage: 0,
-      status: 'processing'
+      message: `Iniciando análisis por lotes (${BATCH_CONFIG.BATCH_SIZE} contratos por llamada)...`
     });
 
-    for (let i = 0; i < total; i++) {
-      const item = itemsToProcess[i];
-      setOcrProgress({
-        currentIndex: i + 1,
-        total,
-        currentFileName: item.photoName,
-        percentage: Math.round(((i + 1) / total) * 100),
-        status: 'processing'
-      });
-
-      // Actualizar estado individual a 'processing'
-      setStudents((prev) =>
-        prev.map((s) => (s.id === item.id ? { ...s, status: 'processing' } : s))
+    try {
+      await OcrService.processAllContractPhotosInBatches(
+        itemsToProcess,
+        (progress: BatchProgressEvent) => {
+          setBatchProgress({
+            isActive: progress.completedItems < progress.totalItems,
+            currentBatch: progress.currentBatch,
+            totalBatches: progress.totalBatches,
+            completedItems: progress.completedItems,
+            totalItems: progress.totalItems,
+            percentage: progress.percentage,
+            message: progress.message
+          });
+        },
+        (batchResults) => {
+          // Actualización progresiva en vivo a medida que cada lote termina
+          setStudents((prev) =>
+            prev.map((s) => {
+              const matched = batchResults.find((r) => r.id === s.id);
+              if (!matched) return s;
+              return {
+                ...s,
+                nombresApellidos: matched.nombresApellidos,
+                carrera: matched.carrera,
+                documentos: [`CONTRATO ${matched.carrera.toUpperCase()}`],
+                photoUrl: matched.processedImageUrl || s.photoUrl,
+                status: matched.status,
+                errorMessage: matched.errorMessage
+              };
+            })
+          );
+        }
       );
-
-      try {
-        if (!item.file) throw new Error('Archivo no disponible');
-
-        const extracted = await OcrService.processContractPhoto(
-          item.file,
-          item.rotationDegrees || 0
-        );
-
-        setStudents((prev) =>
-          prev.map((s) =>
-            s.id === item.id
-              ? {
-                  ...s,
-                  nombresApellidos: extracted.nombresApellidos,
-                  carrera: extracted.carrera,
-                  documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
-                  confidence: extracted.confidence,
-                  rawText: extracted.rawText,
-                  rotationDegrees: extracted.bestRotationDegrees,
-                  photoUrl: extracted.processedImageUrl || s.photoUrl,
-                  status: 'success'
-                }
-              : s
-          )
-        );
-      } catch (err: any) {
-        setStudents((prev) =>
-          prev.map((s) =>
-            s.id === item.id
-              ? {
-                  ...s,
-                  nombresApellidos: 'REVISAR MANUALMENTE',
-                  status: 'error',
-                  errorMessage: err?.message || 'Error al leer imagen'
-                }
-              : s
-          )
-        );
-      }
+    } catch (err: any) {
+      console.error('Error general en procesamiento de lotes:', err);
+    } finally {
+      setBatchProgress((prev) => ({ ...prev, isActive: false, percentage: 100 }));
     }
-
-    setOcrProgress((prev) => ({ ...prev, status: 'completed' }));
   };
 
   // Re-procesar OCR en un alumno individual con una rotación específica
@@ -189,7 +183,6 @@ export const BatchCargoSection: React.FC = () => {
 
     const newDegrees = (((student.rotationDegrees || 0) + deltaDegrees) % 360 + 360) % 360;
 
-    // Actualizar estado a processing
     setStudents((prev) =>
       prev.map((s) => (s.id === studentId ? { ...s, status: 'processing', rotationDegrees: newDegrees } : s))
     );
@@ -215,7 +208,6 @@ export const BatchCargoSection: React.FC = () => {
         )
       );
 
-      // Si el modal de foto ampliada está abierto, actualizar su vista
       if (selectedPhotoStudent && selectedPhotoStudent.id === studentId) {
         setSelectedPhotoStudent((prev) =>
           prev
@@ -305,11 +297,11 @@ export const BatchCargoSection: React.FC = () => {
             <div className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-amber-400" />
               <h2 className="text-xl font-bold font-heading text-slate-100">
-                Generador de Cargo Masivo por Fotos (OCR / IA Vision)
+                Generador de Cargo Masivo por Fotos (Lotes Gemini AI & OCR)
               </h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Sube las fotos de las primeras hojas de los contratos (30+ fotos). La IA extraerá los nombres y carreras automáticamente.
+              Procesamiento optimizado en lotes de {BATCH_CONFIG.BATCH_SIZE} contratos con redimensionamiento a 1024px para máxima velocidad y eficiencia.
             </p>
           </div>
 
@@ -416,7 +408,7 @@ export const BatchCargoSection: React.FC = () => {
               Sube o Arrastra las Fotos de los Contratos
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Puedes seleccionar de 1 a 50+ fotos a la vez (JPG, PNG, WEBP). Incluye auto-recorte y rotación para fotos de celular.
+              Carga de 1 a 50+ fotos juntas. Se procesan por lotes estructurados en paralelo (~15 a 25 seg para 30 fotos).
             </p>
           </div>
 
@@ -430,24 +422,28 @@ export const BatchCargoSection: React.FC = () => {
         </div>
       </div>
 
-      {/* Barra de Progreso del OCR */}
-      {ocrProgress.status === 'processing' && (
+      {/* Barra de Progreso del Lote */}
+      {batchProgress.isActive && (
         <div className="bg-slate-900 border border-blue-800/80 rounded-2xl p-4 text-white shadow-xl space-y-2">
           <div className="flex items-center justify-between text-xs font-semibold">
             <span className="flex items-center gap-2 text-blue-300">
               <RefreshCw className="w-4 h-4 animate-spin text-blue-400" />
-              Procesando foto {ocrProgress.currentIndex} de {ocrProgress.total}:{' '}
-              <strong className="text-white font-mono">{ocrProgress.currentFileName}</strong>
+              {batchProgress.message || `Procesando lote ${batchProgress.currentBatch} de ${batchProgress.totalBatches}...`}
             </span>
-            <span className="text-amber-400 font-mono font-bold">{ocrProgress.percentage}%</span>
+            <span className="text-amber-400 font-mono font-bold">
+              {batchProgress.completedItems}/{batchProgress.totalItems} ({batchProgress.percentage}%)
+            </span>
           </div>
 
           <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-slate-700">
             <div
               className="bg-gradient-to-r from-blue-600 via-indigo-500 to-amber-400 h-2.5 rounded-full transition-all duration-300"
-              style={{ width: `${ocrProgress.percentage}%` }}
+              style={{ width: `${batchProgress.percentage}%` }}
             ></div>
           </div>
+          <p className="text-[11px] text-slate-400 italic">
+            Tiempo estimado: ~15-25 segundos para 30 documentos (2 tandas en paralelo).
+          </p>
         </div>
       )}
 
@@ -467,9 +463,9 @@ export const BatchCargoSection: React.FC = () => {
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => processBatchOcr(students)}
+                onClick={() => processBatchExecution(students)}
                 className="px-3.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-blue-200 cursor-pointer"
-                title="Volver a procesar todas las fotos"
+                title="Volver a procesar todas las fotos en lotes"
               >
                 <RefreshCw className="w-3.5 h-3.5" /> Re-procesar Todo
               </button>
@@ -569,7 +565,7 @@ export const BatchCargoSection: React.FC = () => {
                           />
                           {student.status === 'error' && (
                             <span className="text-[10px] text-red-500 flex items-center gap-1 font-semibold">
-                              <AlertCircle className="w-3 h-3" /> Foto borrosa o de costado. Usa los botones ⟲ / ⟳ para girar.
+                              <AlertCircle className="w-3 h-3" /> Revisar foto o rotar
                             </span>
                           )}
                         </div>
@@ -788,12 +784,12 @@ export const BatchCargoSection: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Google Gemini Vision analiza las fotos de los contratos con <strong>100% de precisión</strong> sin importar si la foto está girada, con sombras o tomada desde un ángulo.
+              Google Gemini Vision procesa en <strong>lotes estructurados de {BATCH_CONFIG.BATCH_SIZE} imágenes</strong> con respuesta JSON validada y máxima precisión.
             </p>
 
             <div>
               <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
-                Gemini API Key (Gratuita de Google)
+                Gemini API Key
               </label>
               <input
                 type="password"
@@ -803,7 +799,7 @@ export const BatchCargoSection: React.FC = () => {
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:border-blue-500 outline-none"
               />
               <p className="text-[11px] text-slate-400 mt-1">
-                ¿No tienes una clave? Consíguela gratis en{' '}
+                Consigue tu clave en{' '}
                 <a
                   href="https://aistudio.google.com/app/apikey"
                   target="_blank"
