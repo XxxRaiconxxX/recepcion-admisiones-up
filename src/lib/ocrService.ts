@@ -24,11 +24,15 @@ export class OcrService {
   private static isInitializing = false;
 
   /**
-   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno
+   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno (.env / Vercel)
    */
   public static getSavedGeminiKey(): string {
     if (typeof window === 'undefined') return '';
-    return localStorage.getItem('up_gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+    return (
+      localStorage.getItem('up_gemini_api_key') ||
+      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+      ''
+    );
   }
 
   public static saveGeminiKey(key: string) {
@@ -92,7 +96,7 @@ export class OcrService {
   }
 
   /**
-   * Extracción con Gemini Vision AI (100% Precisión en cualquier ángulo o foto de celular)
+   * Extracción con Gemini Vision AI con cascada de modelos (gemini-2.5-flash, gemini-1.5-flash, gemini-2.0-flash)
    */
   public static async processWithGeminiVision(
     imageSource: string | File | Blob,
@@ -105,7 +109,8 @@ export class OcrService {
       throw new Error('No se ha configurado la API Key de Gemini');
     }
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+    const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+    let lastError: Error | null = null;
 
     const prompt = `
 Eres un asistente experto en digitalización de contratos de la Universidad del Pacífico (Paraguay).
@@ -125,55 +130,71 @@ Responde ÚNICAMENTE con un objeto JSON con este formato sin texto adicional:
 }
 `;
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
+    for (const model of models) {
+      try {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
               {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: base64Data
-                }
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: 'image/jpeg',
+                      data: base64Data
+                    }
+                  }
+                ]
               }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          response_mime_type: 'application/json'
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              response_mime_type: 'application/json'
+            }
+          })
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Error en ${model} (${response.status}): ${errorText}`);
         }
-      })
-    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Error en Gemini Vision (${response.status}): ${errorText}`);
-    }
+        const data = await response.json();
+        const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        
+        let jsonResult: any = {};
+        try {
+          jsonResult = JSON.parse(candidateText);
+        } catch {
+          const match = candidateText.match(/\{[\s\S]*\}/);
+          if (match) {
+            jsonResult = JSON.parse(match[0]);
+          }
+        }
 
-    const data = await response.json();
-    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    
-    let jsonResult: any = {};
-    try {
-      jsonResult = JSON.parse(candidateText);
-    } catch {
-      const match = candidateText.match(/\{[\s\S]*\}/);
-      if (match) {
-        jsonResult = JSON.parse(match[0]);
+        const nombresApellidos = (jsonResult.nombresApellidos || '').toUpperCase().trim();
+        const carrera = jsonResult.carrera || 'Medicina';
+
+        if (nombresApellidos && nombresApellidos !== 'ALUMNO POR CONFIRMAR') {
+          return {
+            nombresApellidos,
+            carrera,
+            rawText: candidateText,
+            confidence: 99,
+            bestRotationDegrees: 0
+          };
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Intento con ${model} falló, probando siguiente modelo...`, err?.message);
       }
     }
 
-    return {
-      nombresApellidos: (jsonResult.nombresApellidos || 'ALUMNO POR CONFIRMAR').toUpperCase().trim(),
-      carrera: jsonResult.carrera || 'Medicina',
-      rawText: candidateText,
-      confidence: 99,
-      bestRotationDegrees: 0
-    };
+    throw lastError || new Error('No se pudo procesar la imagen con Gemini Vision.');
   }
 
   /**
