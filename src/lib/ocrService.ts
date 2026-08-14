@@ -83,16 +83,23 @@ export class OcrService {
     const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
     const list: string[] = [];
 
-    if (envKey && typeof envKey === 'string' && envKey.trim()) {
+    // Siempre priorizar las claves oficiales incrustadas válidas
+    list.push(...embedded);
+
+    if (envKey && typeof envKey === 'string' && envKey.trim() && !list.includes(envKey.trim())) {
       list.push(envKey.trim());
     }
 
-    list.push(...embedded);
-
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('up_gemini_api_key');
-      if (stored && stored.trim() && !list.includes(stored.trim())) {
-        list.unshift(stored.trim());
+      // Solo considerar si es una clave con formato válido y no es una clave obsoleta/corrupta
+      if (
+        stored &&
+        stored.trim() &&
+        (stored.startsWith('AQ.') || stored.startsWith('AIzaSy')) &&
+        !list.includes(stored.trim())
+      ) {
+        list.push(stored.trim());
       }
     }
 
@@ -145,7 +152,7 @@ export class OcrService {
         const conversionResult = await heic2anyFn({
           blob: fileOrBlob,
           toType: 'image/jpeg',
-          quality: 0.88
+          quality: 0.90
         });
         const convertedBlob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
         if (fileOrBlob instanceof File) {
@@ -163,13 +170,14 @@ export class OcrService {
   }
 
   /**
-   * Redimensiona una imagen con Canvas (lado mayor <= 1024px, JPEG calidad 82%)
-   * Retorna { base64Data, dataUrl } optimizados para Gemini Vision
+   * Redimensiona y orienta una imagen con Canvas (lado mayor <= 1280px, JPEG calidad 85%)
+   * Mantiene el documento COMPLETO, nítido y con colores/gradientes naturales sin binarización destructiva.
    */
   public static async resizeImageForVision(
     imageSource: string | File | Blob,
-    maxDimension = BATCH_CONFIG.MAX_IMAGE_DIMENSION,
-    quality = BATCH_CONFIG.JPEG_QUALITY
+    rotationDeg = 0,
+    maxDimension = 1280,
+    quality = 0.85
   ): Promise<{ base64Data: string; dataUrl: string }> {
     const safeSource = await this.ensureJpegBlob(imageSource);
 
@@ -186,10 +194,13 @@ export class OcrService {
           return;
         }
 
-        let width = img.width;
-        let height = img.height;
+        const normalizedDeg = ((rotationDeg % 360) + 360) % 360;
+        const isSideways = normalizedDeg === 90 || normalizedDeg === 270;
 
-        // Mantener el aspect ratio limitando el lado más largo
+        let width = isSideways ? img.height : img.width;
+        let height = isSideways ? img.width : img.height;
+
+        // Mantener aspect ratio con límite de hasta 1280px para máxima legibilidad de texto pequeño
         if (width > height) {
           if (width > maxDimension) {
             height = Math.round((height * maxDimension) / width);
@@ -205,8 +216,16 @@ export class OcrService {
         canvas.width = width;
         canvas.height = height;
 
-        // Dibujar imagen escalada
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.save();
+        ctx.translate(width / 2, height / 2);
+        ctx.rotate((normalizedDeg * Math.PI) / 180);
+
+        if (isSideways) {
+          ctx.drawImage(img, -height / 2, -width / 2, height, width);
+        } else {
+          ctx.drawImage(img, -width / 2, -height / 2, width, height);
+        }
+        ctx.restore();
 
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
         const base64Data = dataUrl.split(',')[1] || '';
@@ -274,7 +293,7 @@ export class OcrService {
    * Procesa un lote individual de fotos (6 a 8 imágenes) en una sola llamada a Gemini con responseSchema estructurado
    */
   public static async processSingleBatchWithGemini(
-    batchItems: Array<{ id: string; file?: File; photoUrl: string }>,
+    batchItems: Array<{ id: string; file?: File; photoUrl: string; rotationDegrees?: number }>,
     apiKey?: string,
     attempt = 1
   ): Promise<BatchItemResult[]> {
@@ -283,11 +302,14 @@ export class OcrService {
       throw new Error('No se ha configurado la API Key de Gemini');
     }
 
-    // 1. Redimensionar en paralelo todas las imágenes del lote a max 1024px JPEG 82%
+    // 1. Redimensionar y orientar en paralelo todas las imágenes del lote a max 1280px JPEG 85%
     const resizedImages = await Promise.all(
       batchItems.map(async (item) => {
         const source = item.file || item.photoUrl;
-        const { base64Data, dataUrl } = await this.resizeImageForVision(source);
+        const { base64Data, dataUrl } = await this.resizeImageForVision(
+          source,
+          (item as any).rotationDegrees || 0
+        );
         return { id: item.id, base64Data, dataUrl };
       })
     );
@@ -586,12 +608,12 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
   }
 
   /**
-   * Pre-procesa la imagen recortando enfocadamente el tercio superior (donde están Nombres, Apellidos y Carrera)
+   * Pre-procesa la imagen para OCR manteniendo el documento completo y nítido
    */
   public static async preprocessImage(
     imageSource: string | File | Blob,
     rotationDeg = 0,
-    cropTopOnly = true
+    _cropTopOnly = false
   ): Promise<string> {
     const safeSource = await this.ensureJpegBlob(imageSource);
 
@@ -611,30 +633,33 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
         const normalizedDeg = ((rotationDeg % 360) + 360) % 360;
         const isSideways = normalizedDeg === 90 || normalizedDeg === 270;
 
-        let fullWidth = isSideways ? img.height : img.width;
-        let fullHeight = isSideways ? img.width : img.height;
+        let width = isSideways ? img.height : img.width;
+        let height = isSideways ? img.width : img.height;
 
-        const heightFactor = cropTopOnly ? 0.45 : 1.0;
-        let targetHeight = Math.round(fullHeight * heightFactor);
-
-        const maxWidth = 2200;
-        let srcWidth = fullWidth;
-        if (srcWidth > maxWidth) {
-          targetHeight = Math.round((targetHeight * maxWidth) / srcWidth);
-          srcWidth = maxWidth;
+        const maxDimension = 1800;
+        if (width > height) {
+          if (width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
         }
 
-        canvas.width = srcWidth;
-        canvas.height = targetHeight;
+        canvas.width = width;
+        canvas.height = height;
 
         ctx.save();
-        ctx.translate(canvas.width / 2, (fullHeight * (srcWidth / fullWidth)) / 2);
+        ctx.translate(width / 2, height / 2);
         ctx.rotate((normalizedDeg * Math.PI) / 180);
 
         if (isSideways) {
-          ctx.drawImage(img, -fullHeight / 2, -fullWidth / 2, fullHeight, fullWidth);
+          ctx.drawImage(img, -height / 2, -width / 2, height, width);
         } else {
-          ctx.drawImage(img, -fullWidth / 2, -fullHeight / 2, fullWidth, fullHeight);
+          ctx.drawImage(img, -width / 2, -height / 2, width, height);
         }
         ctx.restore();
 
@@ -642,21 +667,15 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
 
+          // Grayscale natural con realce suave sin pérdida de píxeles ni umbralización dura
           for (let i = 0; i < data.length; i += 4) {
             const r = data[i];
             const g = data[i + 1];
             const b = data[i + 2];
 
             let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-            const contrast = 1.45;
-            gray = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
+            gray = Math.pow(gray / 255, 1.12) * 255;
             gray = Math.max(0, Math.min(255, gray));
-
-            if (gray > 180) {
-              gray = 255;
-            } else if (gray < 85) {
-              gray = 0;
-            }
 
             data[i] = gray;
             data[i + 1] = gray;
@@ -664,9 +683,9 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           }
 
           ctx.putImageData(imageData, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.92));
+          resolve(canvas.toDataURL('image/jpeg', 0.90));
         } catch {
-          resolve(typeof safeSource === 'string' ? safeSource : URL.createObjectURL(safeSource));
+          resolve(canvas.toDataURL('image/jpeg', 0.90));
         }
       };
 
@@ -693,9 +712,9 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     if (savedGeminiKey) {
       try {
-        const { dataUrl } = await this.resizeImageForVision(imageSource);
+        const { dataUrl } = await this.resizeImageForVision(imageSource, manualRotation);
         const singleBatch = await this.processSingleBatchWithGemini(
-          [{ id: 'single_test', photoUrl: dataUrl }],
+          [{ id: 'single_test', photoUrl: dataUrl, rotationDegrees: manualRotation }],
           savedGeminiKey
         );
 
@@ -706,8 +725,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
             ci: singleBatch[0].ci,
             rawText: JSON.stringify(singleBatch[0]),
             confidence: 99,
-            bestRotationDegrees: 0,
-            processedImageUrl: singleBatch[0].processedImageUrl,
+            bestRotationDegrees: manualRotation,
+            processedImageUrl: dataUrl,
             extractionSource: 'gemini'
           };
         }
@@ -716,9 +735,9 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
       }
     }
 
-    // OCR Local Tesseract
+    // OCR Local Tesseract (con imagen completa sin binarización destructiva)
     const worker = await this.getWorker();
-    const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation, true);
+    const initialProcessedUrl = await this.preprocessImage(imageSource, manualRotation, false);
     const initialResult = await worker.recognize(initialProcessedUrl);
     let bestRawText = initialResult.data.text || '';
     let bestConfidence = initialResult.data.confidence || 0;
@@ -733,7 +752,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     ) {
       const testAngles = [90, 270, 180];
       for (const angle of testAngles) {
-        const candidateUrl = await this.preprocessImage(imageSource, angle, true);
+        const candidateUrl = await this.preprocessImage(imageSource, angle, false);
         const res = await worker.recognize(candidateUrl);
         const candidateText = res.data.text || '';
         const candidateParsed = this.parseContractText(candidateText);
