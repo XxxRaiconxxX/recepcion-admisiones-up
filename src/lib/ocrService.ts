@@ -53,50 +53,72 @@ const KNOWN_CARRERAS = [
   'Posgrado'
 ];
 
-// Clave permanente oficial incrustada en el sistema para uso continuo y transparente
-const getEmbeddedKey = (): string => {
-  const encoded = 'QVEuQWI4Uk42SUhKT08wLXRRMThlVEdScXhRSXR2d1h5MzJNaFhPczdnaTRLX3p2WTNxYUE=';
-  try {
-    if (typeof atob !== 'undefined') {
-      return atob(encoded);
-    }
-    if (typeof Buffer !== 'undefined') {
-      return Buffer.from(encoded, 'base64').toString('utf-8');
-    }
-  } catch {}
-  return '';
+// Claves permanentes oficiales en rotación activa para balanceo de carga y alta velocidad
+const getEmbeddedKeys = (): string[] => {
+  const encodedList = [
+    'QVEuQWI4Uk42SUhKT08wLXRRMThlVEdScXhRSXR2d1h5MzJNaFhPczdnaTRLX3p2WTNxYUE=', // Key 1
+    'QVEuQWI4Uk42S09IUmU2ZzF1LXg5ckRGZEhzeURhWHJ1LWtISUVYci0yX0xXYWQxTHkwOHc='  // Key 2 (Nueva API de rotación)
+  ];
+  return encodedList
+    .map((encoded) => {
+      try {
+        if (typeof atob !== 'undefined') return atob(encoded);
+        if (typeof Buffer !== 'undefined') return Buffer.from(encoded, 'base64').toString('utf-8');
+      } catch {}
+      return '';
+    })
+    .filter(Boolean);
 };
 
 export class OcrService {
   private static workerInstance: Worker | null = null;
   private static isInitializing = false;
+  private static keyRotationCounter = 0;
 
   /**
-   * Obtiene la API Key de Gemini incrustada por defecto de forma permanente
+   * Obtiene todas las API Keys disponibles para rotación activa
    */
-  public static getSavedGeminiKey(): string {
+  public static getAllAvailableGeminiKeys(): string[] {
+    const embedded = getEmbeddedKeys();
     const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    const list: string[] = [];
+
     if (envKey && typeof envKey === 'string' && envKey.trim()) {
-      return envKey.trim();
+      list.push(envKey.trim());
     }
 
-    const defaultKey = getEmbeddedKey();
+    list.push(...embedded);
 
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('up_gemini_api_key');
-      if (stored && stored.trim()) {
-        return stored.trim();
+      if (stored && stored.trim() && !list.includes(stored.trim())) {
+        list.unshift(stored.trim());
       }
-      try {
-        localStorage.setItem('up_gemini_api_key', defaultKey);
-      } catch {}
     }
 
-    return defaultKey;
+    return Array.from(new Set(list.filter(Boolean)));
+  }
+
+  /**
+   * Rota a la siguiente clave disponible de la lista para balancear peticiones
+   */
+  public static getNextGeminiKey(offset = 0): string {
+    const keys = this.getAllAvailableGeminiKeys();
+    if (keys.length === 0) return '';
+    const index = Math.abs((this.keyRotationCounter + offset) % keys.length);
+    this.keyRotationCounter = (this.keyRotationCounter + 1) % keys.length;
+    return keys[index];
+  }
+
+  /**
+   * Obtiene la API Key de Gemini incrustada por defecto
+   */
+  public static getSavedGeminiKey(): string {
+    return this.getNextGeminiKey(0);
   }
 
   public static saveGeminiKey(key: string) {
-    const defaultKey = getEmbeddedKey();
+    const defaultKey = getEmbeddedKeys()[0] || '';
     if (typeof window === 'undefined') return;
     if (key.trim()) {
       localStorage.setItem('up_gemini_api_key', key.trim());
@@ -253,10 +275,10 @@ export class OcrService {
    */
   public static async processSingleBatchWithGemini(
     batchItems: Array<{ id: string; file?: File; photoUrl: string }>,
-    apiKey: string,
+    apiKey?: string,
     attempt = 1
   ): Promise<BatchItemResult[]> {
-    const key = apiKey.trim() || this.getSavedGeminiKey();
+    const key = apiKey?.trim() || this.getNextGeminiKey(attempt - 1);
     if (!key) {
       throw new Error('No se ha configurado la API Key de Gemini');
     }
@@ -319,27 +341,45 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
       }
     };
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          temperature: 0.1,
-          response_mime_type: 'application/json',
-          response_schema: responseSchema
-        }
-      })
-    });
+    // Timeout de 15 segundos para evitar que la petición quede colgada
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.1,
+            response_mime_type: 'application/json',
+            response_schema: responseSchema
+          }
+        })
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      if (attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
+        const nextKey = this.getNextGeminiKey(attempt);
+        console.warn(`Timeout o fallo en lote (${fetchErr?.message}). Rotando a siguiente API Key (intento ${attempt + 1})...`);
+        await new Promise((r) => setTimeout(r, 800));
+        return this.processSingleBatchWithGemini(batchItems, nextKey, attempt + 1);
+      }
+      throw fetchErr;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      // Si recibimos 429 (Rate Limit) o 503, esperar con backoff exponencial y reintentar
+      // Si recibimos 429 (Rate Limit) o 503, rotar inmediatamente a la otra API Key
       if ((response.status === 429 || response.status === 503) && attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
-        const delay = 3500 * Math.pow(1.5, attempt - 1);
-        console.warn(`Rate limit o sobrecarga (${response.status}) en lote. Esperando ${Math.round(delay)}ms para reintentar (intento ${attempt + 1})...`);
-        await new Promise((r) => setTimeout(r, delay));
-        return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
+        const nextKey = this.getNextGeminiKey(attempt);
+        console.warn(`Rate limit o sobrecarga (${response.status}) en API Key actual. Rotando instantáneamente a siguiente API Key para reintentar...`);
+        await new Promise((r) => setTimeout(r, 800));
+        return this.processSingleBatchWithGemini(batchItems, nextKey, attempt + 1);
       }
       throw new Error(`Gemini Batch API Error (${response.status}): ${errorText}`);
     }
@@ -360,10 +400,10 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     if (!isValid) {
       if (attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
-        const delay = 2000 * attempt;
-        console.warn(`Respuesta incompleta o índices inválidos en lote. Reintentando intento ${attempt + 1}...`);
-        await new Promise((r) => setTimeout(r, delay));
-        return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
+        const nextKey = this.getNextGeminiKey(attempt);
+        console.warn(`Respuesta incompleta o índices inválidos en lote. Reintentando con siguiente API Key (intento ${attempt + 1})...`);
+        await new Promise((r) => setTimeout(r, 1000));
+        return this.processSingleBatchWithGemini(batchItems, nextKey, attempt + 1);
       }
       throw new Error('La respuesta del lote no contiene todos los índices correspondientes a las imágenes enviadas');
     }
@@ -386,7 +426,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
   }
 
   /**
-   * Orquesta el procesamiento de todos los contratos en lotes agrupados con concurrencia controlada
+   * Orquesta el procesamiento de todos los contratos en lotes agrupados con balanceo multi-clave y concurrencia
    */
   public static async processAllContractPhotosInBatches(
     students: BatchCargoStudent[],
@@ -396,11 +436,10 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     const totalItems = students.length;
     if (totalItems === 0) return [];
 
-    const apiKey = this.getSavedGeminiKey();
     const batchSize = BATCH_CONFIG.BATCH_SIZE;
     const maxConcurrency = BATCH_CONFIG.MAX_CONCURRENCY;
 
-    // 1. Dividir los estudiantes en lotes de tamaño configurable (ej. 6 por lote)
+    // 1. Dividir los estudiantes en lotes (ej. 6 por lote)
     const batches: Array<BatchCargoStudent[]> = [];
     for (let i = 0; i < totalItems; i += batchSize) {
       batches.push(students.slice(i, i + batchSize));
@@ -410,13 +449,14 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     let completedItemsCount = 0;
     const allResults: BatchItemResult[] = [];
 
-    // 2. Ejecutar lotes con límite de concurrencia (Promise pool de max 2 simultáneos)
+    // 2. Ejecutar lotes con límite de concurrencia y rotación balanceada de API Keys
     let currentBatchIdx = 0;
 
-    const runWorker = async () => {
+    const runWorker = async (workerId: number) => {
       while (currentBatchIdx < totalBatches) {
         const batchIndex = currentBatchIdx++;
         const batch = batches[batchIndex];
+        const workerKey = this.getNextGeminiKey(workerId);
 
         if (onProgress) {
           onProgress({
@@ -431,21 +471,33 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
         }
 
         try {
-          // Intentar procesamiento por lote con Gemini
-          const batchResults = await this.processSingleBatchWithGemini(batch, apiKey);
+          // Intentar procesamiento por lote con Gemini y clave balanceada
+          const batchResults = await this.processSingleBatchWithGemini(batch, workerKey);
           completedItemsCount += batch.length;
           allResults.push(...batchResults);
+
+          if (onProgress) {
+            onProgress({
+              currentBatch: batchIndex + 1,
+              totalBatches,
+              completedItems: completedItemsCount,
+              totalItems,
+              percentage: Math.round((completedItemsCount / totalItems) * 100),
+              activeBatchSize: batch.length,
+              message: `Lote ${batchIndex + 1} completado con éxito.`
+            });
+          }
 
           if (onBatchCompleted) {
             onBatchCompleted(batchResults);
           }
 
-          // Breve pausa para no saturar los límites de RPM de la API
-          await new Promise((r) => setTimeout(r, 600));
+          // Pausa mínima de 200ms entre lotes
+          await new Promise((r) => setTimeout(r, 200));
         } catch (batchError: any) {
           console.warn(`Lote ${batchIndex + 1} falló. Activando fallback individual para este lote:`, batchError?.message);
 
-          // Fallback individual para las fotos de este lote fallido
+          // Fallback individual para las fotos de este lote
           const fallbackResults: BatchItemResult[] = [];
           for (let i = 0; i < batch.length; i++) {
             const singleItem = batch[i];
@@ -478,31 +530,33 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           completedItemsCount += batch.length;
           allResults.push(...fallbackResults);
 
+          if (onProgress) {
+            onProgress({
+              currentBatch: batchIndex + 1,
+              totalBatches,
+              completedItems: completedItemsCount,
+              totalItems,
+              percentage: Math.round((completedItemsCount / totalItems) * 100),
+              activeBatchSize: batch.length,
+              message: `Lote ${batchIndex + 1} procesado.`
+            });
+          }
+
           if (onBatchCompleted) {
             onBatchCompleted(fallbackResults);
           }
         }
-
-        if (onProgress) {
-          onProgress({
-            currentBatch: Math.min(batchIndex + 1, totalBatches),
-            totalBatches,
-            completedItems: completedItemsCount,
-            totalItems,
-            percentage: Math.round((completedItemsCount / totalItems) * 100),
-            activeBatchSize: batch.length,
-            message: completedItemsCount >= totalItems
-              ? 'Procesamiento de todos los lotes completado.'
-              : `Completado lote ${batchIndex + 1} de ${totalBatches}. Continuando...`
-          });
-        }
       }
     };
 
-    // Lanzar trabajadores concurrentes
-    const workers = Array.from({ length: Math.min(maxConcurrency, totalBatches) }, () => runWorker());
-    await Promise.all(workers);
+    // Lanzar workers paralelos (hasta maxConcurrency) para procesar a máxima velocidad
+    const workersCount = Math.min(maxConcurrency, totalBatches);
+    const workerPromises: Promise<void>[] = [];
+    for (let w = 0; w < workersCount; w++) {
+      workerPromises.push(runWorker(w));
+    }
 
+    await Promise.all(workerPromises);
     return allResults;
   }
 
