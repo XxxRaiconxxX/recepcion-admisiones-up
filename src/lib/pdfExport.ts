@@ -225,7 +225,24 @@ export class DocumentExporter {
                 }),
                 new TableRow({
                   children: [
-                    new TableCell({ children: [new Paragraph({ text: `${student.nombres.toUpperCase()} ${student.apellidos.toUpperCase()}` })] }),
+                    new TableCell({
+                      children: [
+                        new Paragraph({ text: `${student.nombres.toUpperCase()} ${student.apellidos.toUpperCase()}` }),
+                        ...(student.ci
+                          ? [
+                              new Paragraph({
+                                children: [
+                                  new TextRun({
+                                    text: `C.I. N°: ${student.ci}`,
+                                    size: 18,
+                                    color: '555555',
+                                  }),
+                                ],
+                              }),
+                            ]
+                          : []),
+                      ],
+                    }),
                     new TableCell({ children: [new Paragraph({ text: student.carrera.toUpperCase() })] }),
                     new TableCell({ children: [new Paragraph({ text: documentosStr })] }),
                     new TableCell({ children: [new Paragraph({ text: student.observaciones || 'JULIO 2026' })] }),
@@ -285,7 +302,7 @@ export class DocumentExporter {
 
   /**
    * Genera y descarga el archivo Microsoft Word (.docx) del Cargo de Entrega Masivo (30+ alumnos)
-   * Idéntico a la estructura de la imagen de Word proporcionada por el usuario.
+   * Incluye Nombres y Apellidos junto con C.I. N° de cada estudiante.
    */
   public static async generateBatchCargoWordDocx(batchData: BatchCargoData) {
     const cleanDate = batchData.header.fecha.replace(/[/\\?%*:|"<>]/g, '-');
@@ -317,10 +334,28 @@ export class DocumentExporter {
           ? student.documentos.map((doc) => new Paragraph({ text: `-   ${doc.toUpperCase()}` }))
           : [new Paragraph({ text: `-   CONTRATO ${student.carrera.toUpperCase()}` })];
 
+        const nameCellChildren = [
+          new Paragraph({ text: student.nombresApellidos.toUpperCase() })
+        ];
+
+        if (student.ci) {
+          nameCellChildren.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: `C.I. N°: ${student.ci}`,
+                  size: 18,
+                  color: '555555',
+                }),
+              ],
+            })
+          );
+        }
+
         return new TableRow({
           children: [
             new TableCell({
-              children: [new Paragraph({ text: student.nombresApellidos.toUpperCase() })],
+              children: nameCellChildren,
             }),
             new TableCell({
               children: [new Paragraph({ text: student.carrera.toUpperCase() })],

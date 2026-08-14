@@ -167,7 +167,7 @@ export class OcrService {
         index: idx,
         nombresApellidos: (item.nombresApellidos || '').toUpperCase().trim(),
         carrera: item.carrera || 'Medicina',
-        ci: item.ci || ''
+        ci: (item.ci || '').toString().trim()
       });
     }
 
@@ -214,9 +214,9 @@ Para CADA imagen debes extraer con total exactitud:
 - index: El número de índice de la imagen correspondiente (0 a ${resizedImages.length - 1}).
 - nombres: El texto exacto al lado de "Nombres:".
 - apellidos: El texto exacto al lado de "Apellidos:".
-- nombresApellidos: Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "KIARA LIBETH TRINIDAD ARIAS").
+- nombresApellidos: Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "PABLA MARGARITA TROCHE FERNANDEZ").
 - carrera: La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
-- ci: Número de cédula de identidad si figura.
+- ci: El número de documento o cédula de identidad que figura exactamente al lado de "Nro.:" o "Nro:" (ejemplo: "7261797" o "7373454").
 
 Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los índices de 0 a ${resizedImages.length - 1} sin omitir ninguna imagen.
 `;
@@ -244,7 +244,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           apellidos: { type: 'STRING' },
           nombresApellidos: { type: 'STRING', description: 'Nombres y Apellidos completos' },
           carrera: { type: 'STRING', description: 'Carrera universitaria' },
-          ci: { type: 'STRING', description: 'Cédula de identidad' }
+          ci: { type: 'STRING', description: 'Número de cédula/documento de identidad que está al lado de Nro.:' }
         },
         required: ['index', 'nombresApellidos', 'carrera']
       }
@@ -306,7 +306,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
         index: idx,
         nombresApellidos: parsedItem.nombresApellidos || 'ALUMNO POR CONFIRMAR',
         carrera: parsedItem.carrera || 'Medicina',
-        ci: parsedItem.ci,
+        ci: parsedItem.ci || '',
         processedImageUrl: resized?.dataUrl || item.photoUrl,
         status: 'success'
       };
@@ -381,7 +381,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
                 index: i,
                 nombresApellidos: singleData.nombresApellidos,
                 carrera: singleData.carrera,
-                ci: singleData.ci,
+                ci: singleData.ci || '',
                 processedImageUrl: singleData.processedImageUrl || singleItem.photoUrl,
                 status: 'success'
               });
@@ -391,6 +391,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
                 index: i,
                 nombresApellidos: 'REVISAR MANUALMENTE',
                 carrera: singleItem.carrera || 'Medicina',
+                ci: '',
                 status: 'error',
                 errorMessage: err?.message || 'Error de lectura'
               });
@@ -620,6 +621,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     return {
       nombresApellidos: parsed.nombresApellidos,
       carrera: parsed.carrera,
+      ci: parsed.ci,
       rawText: bestRawText,
       confidence: bestConfidence,
       bestRotationDegrees: bestRotation,
@@ -633,7 +635,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     return keywords.filter((k) => upper.includes(k)).length >= 2;
   }
 
-  public static parseContractText(text: string): { nombresApellidos: string; carrera: string } {
+  public static parseContractText(text: string): { nombresApellidos: string; carrera: string; ci?: string } {
     let detectedCarrera = 'Medicina';
     const textLower = text.toLowerCase();
 
@@ -660,6 +662,14 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
     const matchApellidos = text.match(apellidosRegex);
     if (matchApellidos && matchApellidos[1]) {
       extractedApellidos = this.cleanNameCandidate(matchApellidos[1]);
+    }
+
+    // Extracción de C.I. / Nro
+    let extractedCi = '';
+    const ciRegex = /(?:Nro\.?|Nro|N°|C\.?I\.?|Cédula|Cedula)\s*[:.-]?\s*(\d{4,10})/i;
+    const matchCi = text.match(ciRegex);
+    if (matchCi && matchCi[1]) {
+      extractedCi = matchCi[1].trim();
     }
 
     let detectedName = '';
@@ -740,7 +750,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     return {
       nombresApellidos: detectedName ? detectedName.toUpperCase() : 'ALUMNO POR CONFIRMAR',
-      carrera: detectedCarrera
+      carrera: detectedCarrera,
+      ci: extractedCi
     };
   }
 

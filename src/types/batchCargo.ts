@@ -5,6 +5,7 @@ export interface BatchCargoStudent {
   photoName: string;
   rotationDegrees?: number;
   nombresApellidos: string;
+  ci?: string;
   carrera: string;
   documentos: string[];
   observacion: string;

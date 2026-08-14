@@ -91,7 +91,12 @@ export const CargoPrintTemplate: React.FC<CargoPrintTemplateProps> = ({ student 
           <tbody className="divide-y divide-slate-900">
             <tr className="align-top">
               <td className="p-2.5 border-r border-slate-900 font-bold uppercase text-slate-900" style={{ overflowWrap: 'anywhere' }}>
-                {nombreCompleto}
+                <div>{nombreCompleto}</div>
+                {student.ci && (
+                  <div className="text-[10px] text-slate-700 font-mono font-normal mt-0.5">
+                    C.I. N°: {student.ci}
+                  </div>
+                )}
               </td>
               <td className="p-2.5 border-r border-slate-900 font-semibold uppercase text-slate-800" style={{ overflowWrap: 'anywhere' }}>
                 {student.carrera || 'MEDICINA'}

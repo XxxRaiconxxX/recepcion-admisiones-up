@@ -159,6 +159,7 @@ export const BatchCargoSection: React.FC = () => {
               return {
                 ...s,
                 nombresApellidos: matched.nombresApellidos,
+                ci: matched.ci || s.ci || '',
                 carrera: matched.carrera,
                 documentos: [`CONTRATO ${matched.carrera.toUpperCase()}`],
                 photoUrl: matched.processedImageUrl || s.photoUrl,
@@ -196,6 +197,7 @@ export const BatchCargoSection: React.FC = () => {
             ? {
                 ...s,
                 nombresApellidos: extracted.nombresApellidos,
+                ci: extracted.ci || s.ci || '',
                 carrera: extracted.carrera,
                 documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
                 confidence: extracted.confidence,
@@ -268,6 +270,7 @@ export const BatchCargoSection: React.FC = () => {
       photoUrl: '',
       rotationDegrees: 0,
       nombresApellidos: '',
+      ci: '',
       carrera: 'Medicina',
       documentos: ['CONTRATO MEDICINA'],
       observacion: header.observacionGlobal,
@@ -551,18 +554,36 @@ export const BatchCargoSection: React.FC = () => {
                         )}
                       </td>
 
-                      {/* Nombres y Apellidos Editables */}
+                      {/* Nombres y Apellidos + CI Editables */}
                       <td className="py-2.5 px-3">
-                        <div className="space-y-1">
-                          <input
-                            type="text"
-                            value={student.nombresApellidos}
-                            onChange={(e) =>
-                              updateStudentField(student.id, 'nombresApellidos', e.target.value.toUpperCase())
-                            }
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-bold text-xs text-slate-900 focus:ring-2 focus:ring-blue-600 outline-none"
-                            placeholder="EJ: KIARA LIBETH TRINIDAD ARIAS"
-                          />
+                        <div className="space-y-1.5">
+                          <div>
+                            <input
+                              type="text"
+                              value={student.nombresApellidos}
+                              onChange={(e) =>
+                                updateStudentField(student.id, 'nombresApellidos', e.target.value.toUpperCase())
+                              }
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-bold text-xs text-slate-900 focus:ring-2 focus:ring-blue-600 outline-none"
+                              placeholder="EJ: PABLA MARGARITA TROCHE FERNANDEZ"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">
+                              C.I. N°:
+                            </span>
+                            <input
+                              type="text"
+                              value={student.ci || ''}
+                              onChange={(e) =>
+                                updateStudentField(student.id, 'ci', e.target.value)
+                              }
+                              className="w-full px-2 py-0.5 rounded border border-slate-200 font-mono text-[11px] text-slate-800 focus:ring-2 focus:ring-blue-600 outline-none"
+                              placeholder="Ej: 7261797"
+                            />
+                          </div>
+
                           {student.status === 'error' && (
                             <span className="text-[10px] text-red-500 flex items-center gap-1 font-semibold">
                               <AlertCircle className="w-3 h-3" /> Revisar foto o rotar

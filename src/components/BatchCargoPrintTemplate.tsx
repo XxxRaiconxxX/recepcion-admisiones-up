@@ -123,7 +123,12 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
                       return (
                         <tr key={student.id || sIdx} className="align-top hover:bg-slate-50">
                           <td className="p-2 border-r border-slate-900 font-bold uppercase text-slate-900 text-[11px]" style={{ overflowWrap: 'anywhere' }}>
-                            {student.nombresApellidos}
+                            <div>{student.nombresApellidos}</div>
+                            {student.ci && (
+                              <div className="text-[10px] text-slate-700 font-mono font-normal mt-0.5">
+                                C.I. N°: {student.ci}
+                              </div>
+                            )}
                           </td>
                           <td className="p-2 border-r border-slate-900 font-semibold uppercase text-slate-800 text-[10px]" style={{ overflowWrap: 'anywhere' }}>
                             {student.carrera}
