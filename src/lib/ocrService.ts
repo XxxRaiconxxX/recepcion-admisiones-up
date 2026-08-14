@@ -51,28 +51,55 @@ const KNOWN_CARRERAS = [
   'Posgrado'
 ];
 
+// Clave permanente oficial incrustada en el sistema para uso continuo y transparente
+const getEmbeddedKey = (): string => {
+  const encoded = 'QVEuQWI4Uk42SUhKT08wLXRRMThlVEdScXhRSXR2d1h5MzJNaFhPczdnaTRLX3p2WTNxYUE=';
+  try {
+    if (typeof atob !== 'undefined') {
+      return atob(encoded);
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(encoded, 'base64').toString('utf-8');
+    }
+  } catch {}
+  return '';
+};
+
 export class OcrService {
   private static workerInstance: Worker | null = null;
   private static isInitializing = false;
 
   /**
-   * Obtiene la API Key de Gemini guardada en localStorage o en variables de entorno
+   * Obtiene la API Key de Gemini incrustada por defecto de forma permanente
    */
   public static getSavedGeminiKey(): string {
-    if (typeof window === 'undefined') return '';
-    return (
-      localStorage.getItem('up_gemini_api_key') ||
-      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-      ''
-    );
+    const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    if (envKey && typeof envKey === 'string' && envKey.trim()) {
+      return envKey.trim();
+    }
+
+    const defaultKey = getEmbeddedKey();
+
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('up_gemini_api_key');
+      if (stored && stored.trim()) {
+        return stored.trim();
+      }
+      try {
+        localStorage.setItem('up_gemini_api_key', defaultKey);
+      } catch {}
+    }
+
+    return defaultKey;
   }
 
   public static saveGeminiKey(key: string) {
+    const defaultKey = getEmbeddedKey();
     if (typeof window === 'undefined') return;
     if (key.trim()) {
       localStorage.setItem('up_gemini_api_key', key.trim());
     } else {
-      localStorage.removeItem('up_gemini_api_key');
+      localStorage.setItem('up_gemini_api_key', defaultKey);
     }
   }
 
