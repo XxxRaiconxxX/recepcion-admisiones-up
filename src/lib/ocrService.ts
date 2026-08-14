@@ -9,6 +9,7 @@ export interface ExtractedContractData {
   confidence: number;
   bestRotationDegrees: number;
   processedImageUrl?: string;
+  extractionSource?: 'gemini' | 'local_ocr';
 }
 
 export interface BatchItemResult {
@@ -18,6 +19,7 @@ export interface BatchItemResult {
   carrera: string;
   ci?: string;
   status: 'success' | 'error';
+  extractionSource: 'gemini' | 'local_ocr';
   errorMessage?: string;
   processedImageUrl?: string;
 }
@@ -377,7 +379,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los Ã
         carrera: parsedItem.carrera || 'Medicina',
         ci: parsedItem.ci || '',
         processedImageUrl: resized?.dataUrl || item.photoUrl,
-        status: 'success'
+        status: 'success',
+        extractionSource: 'gemini'
       };
     });
   }
@@ -455,7 +458,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los Ã
                 carrera: singleData.carrera,
                 ci: singleData.ci || '',
                 processedImageUrl: singleData.processedImageUrl || singleItem.photoUrl,
-                status: 'success'
+                status: singleData.extractionSource === 'gemini' ? 'success' : 'success',
+                extractionSource: singleData.extractionSource || 'local_ocr'
               });
             } catch (err: any) {
               fallbackResults.push({
@@ -465,6 +469,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los Ã
                 carrera: singleItem.carrera || 'Medicina',
                 ci: '',
                 status: 'error',
+                extractionSource: 'local_ocr',
                 errorMessage: err?.message || 'Error de lectura'
               });
             }
@@ -648,7 +653,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los Ã
             rawText: JSON.stringify(singleBatch[0]),
             confidence: 99,
             bestRotationDegrees: 0,
-            processedImageUrl: singleBatch[0].processedImageUrl
+            processedImageUrl: singleBatch[0].processedImageUrl,
+            extractionSource: 'gemini'
           };
         }
       } catch (err) {
@@ -699,7 +705,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los Ã
       rawText: bestRawText,
       confidence: bestConfidence,
       bestRotationDegrees: bestRotation,
-      processedImageUrl: bestProcessedUrl
+      processedImageUrl: bestProcessedUrl,
+      extractionSource: 'local_ocr'
     };
   }
 

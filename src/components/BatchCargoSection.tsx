@@ -194,6 +194,7 @@ export const BatchCargoSection: React.FC = () => {
                 documentos: [`CONTRATO ${matched.carrera.toUpperCase()}`],
                 photoUrl: matched.processedImageUrl || s.photoUrl,
                 status: matched.status,
+                extractionSource: matched.extractionSource || 'gemini',
                 errorMessage: matched.errorMessage
               };
             })
@@ -204,6 +205,71 @@ export const BatchCargoSection: React.FC = () => {
       console.error('Error general en procesamiento de lotes:', err);
     } finally {
       setBatchProgress((prev) => ({ ...prev, isActive: false, percentage: 100 }));
+    }
+  };
+
+  // Re-procesar únicamente los alumnos que cayeron en OCR local o tuvieron error (sin tocar los ya exitosos con Gemini)
+  const handleReprocessOnlyFallbackOrErrors = async () => {
+    const pendingItems = students.filter(
+      (s) =>
+        s.extractionSource === 'local_ocr' ||
+        s.status === 'error' ||
+        s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
+        s.nombresApellidos.includes('REVISAR') ||
+        s.nombresApellidos.includes('PEDRO JUAN') ||
+        s.nombresApellidos.includes('UN E PEE') ||
+        !s.nombresApellidos.trim()
+    );
+
+    if (pendingItems.length === 0) {
+      alert('¡Todos los alumnos ya fueron extraídos con éxito por Gemini Vision AI!');
+      return;
+    }
+
+    // Marcar como en proceso únicamente a los pendientes
+    setStudents((prev) =>
+      prev.map((s) =>
+        pendingItems.some((p) => p.id === s.id) ? { ...s, status: 'processing' } : s
+      )
+    );
+
+    await processBatchExecution(pendingItems);
+  };
+
+  // Re-procesar un alumno individual específicamente con Gemini Vision
+  const handleReprocessSingleStudentWithGemini = async (studentId: string) => {
+    const student = students.find((s) => s.id === studentId);
+    if (!student || !student.file) return;
+
+    setStudents((prev) =>
+      prev.map((s) => (s.id === studentId ? { ...s, status: 'processing' } : s))
+    );
+
+    try {
+      const extracted = await OcrService.processContractPhoto(student.file, student.rotationDegrees || 0);
+
+      setStudents((prev) =>
+        prev.map((s) =>
+          s.id === studentId
+            ? {
+                ...s,
+                nombresApellidos: extracted.nombresApellidos,
+                ci: extracted.ci || s.ci || '',
+                carrera: extracted.carrera,
+                documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
+                confidence: extracted.confidence,
+                rawText: extracted.rawText,
+                photoUrl: extracted.processedImageUrl || s.photoUrl,
+                status: 'success',
+                extractionSource: extracted.extractionSource || 'gemini'
+              }
+            : s
+        )
+      );
+    } catch (err: any) {
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? { ...s, status: 'error', errorMessage: err?.message } : s))
+      );
     }
   };
 
@@ -234,7 +300,8 @@ export const BatchCargoSection: React.FC = () => {
                 rawText: extracted.rawText,
                 rotationDegrees: newDegrees,
                 photoUrl: extracted.processedImageUrl || s.photoUrl,
-                status: 'success'
+                status: 'success',
+                extractionSource: extracted.extractionSource || 'gemini'
               }
             : s
         )
@@ -490,17 +557,50 @@ export const BatchCargoSection: React.FC = () => {
                 Alumnos en este Cargo de Entrega ({students.length})
               </h3>
               <p className="text-xs text-slate-500">
-                Verifica los nombres y carreras extraídos. Si una foto vino de costado, usa los botones ⟲ / ⟳ para girar y auto-reprocesar.
+                Verifica los nombres y carreras extraídos. Las fotos procesadas por Gemini se conservan intactas; puedes re-procesar solo las pendientes.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {students.filter(
+                (s) =>
+                  s.extractionSource === 'local_ocr' ||
+                  s.status === 'error' ||
+                  s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
+                  s.nombresApellidos.includes('REVISAR') ||
+                  s.nombresApellidos.includes('PEDRO JUAN') ||
+                  s.nombresApellidos.includes('UN E PEE') ||
+                  !s.nombresApellidos.trim()
+              ).length > 0 && (
+                <button
+                  onClick={handleReprocessOnlyFallbackOrErrors}
+                  disabled={batchProgress.isActive}
+                  className="px-3.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-amber-300 shadow-sm cursor-pointer animate-pulse"
+                  title="Re-procesa ÚNICAMENTE las fotos que usaron OCR local o fallaron, sin tocar las que ya pasaron con Gemini"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
+                  Re-procesar solo OCR/Pendientes con Gemini ({
+                    students.filter(
+                      (s) =>
+                        s.extractionSource === 'local_ocr' ||
+                        s.status === 'error' ||
+                        s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
+                        s.nombresApellidos.includes('REVISAR') ||
+                        s.nombresApellidos.includes('PEDRO JUAN') ||
+                        s.nombresApellidos.includes('UN E PEE') ||
+                        !s.nombresApellidos.trim()
+                    ).length
+                  })
+                </button>
+              )}
+
               <button
                 onClick={() => processBatchExecution(students)}
-                className="px-3.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-blue-200 cursor-pointer"
-                title="Volver a procesar todas las fotos en lotes"
+                disabled={batchProgress.isActive}
+                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-slate-300 cursor-pointer"
+                title="Volver a procesar todas las fotos en lotes desde cero"
               >
-                <RefreshCw className="w-3.5 h-3.5" /> Re-procesar Todo
+                <RefreshCw className="w-3.5 h-3.5" /> Re-procesar Todo ({students.length})
               </button>
 
               <button
@@ -594,29 +694,59 @@ export const BatchCargoSection: React.FC = () => {
                               onChange={(e) =>
                                 updateStudentField(student.id, 'nombresApellidos', e.target.value.toUpperCase())
                               }
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-bold text-xs text-slate-900 focus:ring-2 focus:ring-blue-600 outline-none"
+                              className={`w-full px-2.5 py-1.5 rounded-lg border font-bold text-xs outline-none focus:ring-2 ${
+                                student.extractionSource === 'local_ocr' || student.status === 'error'
+                                  ? 'border-amber-400 bg-amber-50/30 text-slate-900 focus:ring-amber-500'
+                                  : 'border-slate-300 text-slate-900 focus:ring-blue-600'
+                              }`}
                               placeholder="EJ: PABLA MARGARITA TROCHE FERNANDEZ"
                             />
                           </div>
 
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">
-                              C.I. N°:
-                            </span>
-                            <input
-                              type="text"
-                              value={student.ci || ''}
-                              onChange={(e) =>
-                                updateStudentField(student.id, 'ci', e.target.value)
-                              }
-                              className="w-full px-2 py-0.5 rounded border border-slate-200 font-mono text-[11px] text-slate-800 focus:ring-2 focus:ring-blue-600 outline-none"
-                              placeholder="Ej: 7261797"
-                            />
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">
+                                C.I. N°:
+                              </span>
+                              <input
+                                type="text"
+                                value={student.ci || ''}
+                                onChange={(e) =>
+                                  updateStudentField(student.id, 'ci', e.target.value)
+                                }
+                                className="w-full max-w-[140px] px-2 py-0.5 rounded border border-slate-200 font-mono text-[11px] text-slate-800 focus:ring-2 focus:ring-blue-600 outline-none"
+                                placeholder="Ej: 7261797"
+                              />
+                            </div>
+
+                            {/* Badge de fuente y botón de re-procesar individual */}
+                            <div className="flex items-center gap-1">
+                              {student.extractionSource === 'gemini' && student.status === 'success' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                                  ✓ Gemini AI
+                                </span>
+                              )}
+
+                              {(student.extractionSource === 'local_ocr' ||
+                                student.status === 'error' ||
+                                student.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
+                                student.nombresApellidos.includes('REVISAR')) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleReprocessSingleStudentWithGemini(student.id)}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold border border-amber-300 transition-colors cursor-pointer"
+                                  title="Re-analizar este contrato individual con Gemini AI"
+                                >
+                                  <RefreshCw className="w-2.5 h-2.5 text-amber-700" />
+                                  Re-escanear con IA
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                           {student.status === 'error' && (
                             <span className="text-[10px] text-red-500 flex items-center gap-1 font-semibold">
-                              <AlertCircle className="w-3 h-3" /> Revisar foto o rotar
+                              <AlertCircle className="w-3 h-3" /> {student.errorMessage || 'Revisar foto o rotar'}
                             </span>
                           )}
                         </div>

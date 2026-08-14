@@ -10,6 +10,7 @@ export interface BatchCargoStudent {
   documentos: string[];
   observacion: string;
   status: 'pending' | 'processing' | 'success' | 'error';
+  extractionSource?: 'gemini' | 'local_ocr' | 'manual';
   confidence?: number;
   rawText?: string;
   errorMessage?: string;
