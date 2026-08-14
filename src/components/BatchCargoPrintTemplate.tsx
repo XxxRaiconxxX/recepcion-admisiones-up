@@ -8,25 +8,36 @@ interface BatchCargoPrintTemplateProps {
 export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = ({ batchData }) => {
   const { header, students } = batchData;
 
-  // Dividir los alumnos en páginas continuas A4 (6 alumnos en hoja 1 por encabezado, 8 en hojas intermedias)
+  // Paginación continua inteligente y compacta
+  // Permite agrupar muchos más alumnos por hoja y continúa limpiamente en las hojas siguientes.
   const paginateStudents = (items: BatchCargoStudent[]) => {
+    if (items.length === 0) return [[]];
+
+    // Si entran todos en 1 sola hoja con firmas (hasta 9 alumnos)
+    if (items.length <= 9) {
+      return [items];
+    }
+
     const pages: BatchCargoStudent[][] = [];
     let currentIdx = 0;
 
-    // Primera página: 6 alumnos para dejar espacio al encabezado completo
-    const firstPageCount = 6;
-    pages.push(items.slice(0, firstPageCount));
-    currentIdx += firstPageCount;
+    // Hoja 1: Encabezado formal + hasta 10 alumnos
+    const page1Count = Math.min(items.length, 10);
+    pages.push(items.slice(0, page1Count));
+    currentIdx += page1Count;
 
-    // Páginas siguientes: 8 alumnos por página
-    const subsequentPageCount = 8;
+    // Hojas siguientes (Hojas intermedias y final)
     while (currentIdx < items.length) {
-      pages.push(items.slice(currentIdx, currentIdx + subsequentPageCount));
-      currentIdx += subsequentPageCount;
-    }
-
-    if (pages.length === 0) {
-      pages.push([]);
+      const remaining = items.length - currentIdx;
+      // Si los restantes entran cómodamente en la hoja final con firmas (hasta 13 alumnos)
+      if (remaining <= 13) {
+        pages.push(items.slice(currentIdx));
+        break;
+      }
+      // Hojas intermedias sin firmas: entran hasta 16 alumnos
+      const batchCount = 16;
+      pages.push(items.slice(currentIdx, currentIdx + batchCount));
+      currentIdx += batchCount;
     }
 
     return pages;
@@ -44,28 +55,28 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
         return (
           <div
             key={pageIdx}
-            className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-8 text-black font-sans text-[11pt] leading-relaxed border border-slate-300 shadow-lg rounded-sm flex flex-col justify-between print:border-none print:shadow-none print:p-0 print:min-h-0 print:page-break-after"
+            className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-7 text-black font-sans text-[10pt] leading-tight border border-slate-300 shadow-lg rounded-sm flex flex-col justify-between print:border-none print:shadow-none print:p-0 print:min-h-0 print:page-break-after"
           >
             <div>
               {/* Encabezado N° Promoción y Paginación */}
-              <div className="flex justify-between items-center text-xs font-semibold text-slate-800 mb-3 border-b border-slate-200 pb-1">
+              <div className="flex justify-between items-center text-[10px] font-semibold text-slate-800 mb-2 border-b border-slate-200 pb-1">
                 <span>Universidad del Pacífico • Admisiones y Recepción</span>
                 <div className="flex items-center gap-3">
                   <span className="font-mono">{header.numeroCargo || 'N° / 2026 Promoción'}</span>
-                  <span className="text-slate-500 font-mono">Página {pageIdx + 1} de {totalPages}</span>
+                  <span className="text-slate-500 font-mono font-bold">Página {pageIdx + 1} de {totalPages}</span>
                 </div>
               </div>
 
-              {/* Encabezado completo en la primera página */}
+              {/* Encabezado completo SOLO en la primera página */}
               {isFirstPage ? (
-                <div className="border border-slate-900 rounded-sm p-4 mb-5 bg-slate-50/50">
-                  <h1 className="text-xl font-bold uppercase tracking-wide text-slate-900 border-b border-slate-400 pb-2 mb-3">
+                <div className="border border-slate-900 rounded-sm p-3 mb-3 bg-slate-50/60">
+                  <h1 className="text-lg font-bold uppercase tracking-wide text-slate-900 border-b border-slate-400 pb-1 mb-2 text-center">
                     Cargo de Entrega
                   </h1>
                   
                   <div
-                    className="grid gap-x-3 gap-y-1.5 text-sm"
-                    style={{ gridTemplateColumns: '7rem minmax(0, 1fr)' }}
+                    className="grid gap-x-3 gap-y-1 text-xs"
+                    style={{ gridTemplateColumns: '6.5rem minmax(0, 1fr)' }}
                   >
                     <span className="font-bold">Para:</span>
                     <span>
@@ -91,27 +102,28 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
                   </div>
                 </div>
               ) : (
-                <div className="mb-4 text-xs font-bold uppercase text-slate-700 bg-slate-100 p-2 rounded flex justify-between">
-                  <span>Cargo de Entrega (Continuación) — {header.referencia}</span>
-                  <span>Fecha: {header.fecha}</span>
+                /* En hojas siguientes: Cabecera minimalista de continuación (NO repite el cargo completo) */
+                <div className="mb-2.5 text-[11px] font-bold uppercase text-slate-800 bg-slate-100/80 px-3 py-1.5 rounded border border-slate-300 flex justify-between items-center">
+                  <span>Cargo de Entrega — Continuación de Alumnos</span>
+                  <span className="font-mono text-[10px] text-slate-600">Fecha: {header.fecha}</span>
                 </div>
               )}
 
-              {/* Tabla de Alumnos de esta página */}
-              <div className="overflow-hidden border border-slate-900 mb-4">
-                <table className="w-full table-fixed text-left border-collapse text-xs">
+              {/* Tabla Compacta de Alumnos */}
+              <div className="overflow-hidden border border-slate-900 mb-3">
+                <table className="w-full table-fixed text-left border-collapse text-[10px]">
                   <colgroup>
-                    <col style={{ width: '28%' }} />
+                    <col style={{ width: '30%' }} />
                     <col style={{ width: '18%' }} />
-                    <col style={{ width: '38%' }} />
+                    <col style={{ width: '36%' }} />
                     <col style={{ width: '16%' }} />
                   </colgroup>
                   <thead>
-                    <tr className="bg-slate-900 text-white font-bold uppercase tracking-wide text-[9px]">
-                      <th className="p-2 border-r border-slate-700">Nombres y Apellidos</th>
-                      <th className="p-2 border-r border-slate-700">Carrera</th>
-                      <th className="p-2 border-r border-slate-700">Documentos</th>
-                      <th className="p-2">Observación</th>
+                    <tr className="bg-slate-900 text-white font-bold uppercase tracking-wide text-[8.5px]">
+                      <th className="p-1.5 border-r border-slate-700">Nombres y Apellidos</th>
+                      <th className="p-1.5 border-r border-slate-700">Carrera</th>
+                      <th className="p-1.5 border-r border-slate-700">Documentos</th>
+                      <th className="p-1.5">Observación</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-900">
@@ -122,25 +134,25 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
 
                       return (
                         <tr key={student.id || sIdx} className="align-top hover:bg-slate-50">
-                          <td className="p-2 border-r border-slate-900 font-bold uppercase text-slate-900 text-[11px]" style={{ overflowWrap: 'anywhere' }}>
+                          <td className="p-1.5 border-r border-slate-900 font-bold uppercase text-slate-900 text-[10px]" style={{ overflowWrap: 'anywhere' }}>
                             <div>{student.nombresApellidos}</div>
                             {student.ci && (
-                              <div className="text-[10px] text-slate-700 font-mono font-normal mt-0.5">
+                              <div className="text-[9px] text-slate-700 font-mono font-normal mt-0.5">
                                 C.I. N°: {student.ci}
                               </div>
                             )}
                           </td>
-                          <td className="p-2 border-r border-slate-900 font-semibold uppercase text-slate-800 text-[10px]" style={{ overflowWrap: 'anywhere' }}>
+                          <td className="p-1.5 border-r border-slate-900 font-semibold uppercase text-slate-800 text-[9.5px]" style={{ overflowWrap: 'anywhere' }}>
                             {student.carrera}
                           </td>
-                          <td className="p-2 border-r border-slate-900 text-[10px] leading-snug font-mono text-slate-900" style={{ overflowWrap: 'anywhere' }}>
-                            <ul className="list-disc pl-3 space-y-0.5">
+                          <td className="p-1.5 border-r border-slate-900 text-[9px] leading-snug font-mono text-slate-900" style={{ overflowWrap: 'anywhere' }}>
+                            <ul className="list-disc pl-2.5 space-y-0.5">
                               {docItems.map((doc, dIdx) => (
                                 <li key={dIdx}>{doc.toUpperCase()}</li>
                               ))}
                             </ul>
                           </td>
-                          <td className="p-2 text-[10px] leading-snug font-semibold text-slate-800" style={{ overflowWrap: 'anywhere' }}>
+                          <td className="p-1.5 text-[9px] leading-snug font-semibold text-slate-800" style={{ overflowWrap: 'anywhere' }}>
                             {student.observacion || header.observacionGlobal || 'JULIO 2026'}
                           </td>
                         </tr>
@@ -151,43 +163,43 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
               </div>
             </div>
 
-            {/* Cierre Formal y Firmas al pie de la última página */}
+            {/* Cierre Formal y Bloque de Firmas ÚNICAMENTE al pie de la última página */}
             {isLastPage ? (
               <div className="pt-2">
-                <p className="italic text-xs text-slate-800 mb-6">
+                <p className="italic text-[10px] text-slate-800 mb-3">
                   Sin otro particular, me despido muy atentamente.
                 </p>
 
-                <div className="grid grid-cols-2 gap-12 pt-3 border-t border-slate-300 text-xs">
+                <div className="grid grid-cols-2 gap-8 pt-2 border-t border-slate-300 text-xs">
                   {/* Firma Recepción */}
-                  <div className="space-y-1">
-                    <div className="h-16 flex items-end mb-1">
-                      <span className="text-slate-400 italic text-[10px]">Firma de quien recepciona</span>
+                  <div className="space-y-0.5">
+                    <div className="h-12 flex items-end mb-1">
+                      <span className="text-slate-400 italic text-[9px]">Firma de quien recepciona</span>
                     </div>
                     <div className="border-t border-slate-900 pt-1">
-                      <p className="font-bold text-slate-900">Recibido por:</p>
-                      <p className="text-slate-700 font-semibold mt-0.5">
+                      <p className="font-bold text-slate-900 text-[10px]">Recibido por:</p>
+                      <p className="text-slate-700 font-semibold text-[10px] mt-0.5">
                         {header.para || 'Arlet Gonzalez'}
                       </p>
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[9px] text-slate-500">
                         Aclaración de firma / Fecha: {header.fecha}
                       </p>
                     </div>
                   </div>
 
                   {/* Firma Asesor */}
-                  <div className="space-y-1 text-right">
-                    <div className="h-16 flex items-end justify-end mb-1">
-                      <span className="text-slate-400 italic text-[10px]">Firma del Asesor Comercial</span>
+                  <div className="space-y-0.5 text-right">
+                    <div className="h-12 flex items-end justify-end mb-1">
+                      <span className="text-slate-400 italic text-[9px]">Firma del Asesor Comercial</span>
                     </div>
                     <div className="border-t border-slate-900 pt-1">
-                      <p className="font-bold text-slate-900 uppercase">
+                      <p className="font-bold text-slate-900 uppercase text-[10px]">
                         {header.de || 'AXEL FRETES'}
                       </p>
-                      <p className="text-slate-700 font-medium">
+                      <p className="text-slate-700 font-medium text-[10px]">
                         Asesor Grado Promoción
                       </p>
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[9px] text-slate-500">
                         Universidad del Pacífico
                       </p>
                     </div>
@@ -195,8 +207,8 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
                 </div>
               </div>
             ) : (
-              <div className="text-right text-[10px] text-slate-400 italic">
-                Continúa en la siguiente página...
+              <div className="text-right text-[9px] text-slate-400 italic border-t border-slate-100 pt-1">
+                Continúa en la página {pageIdx + 2}...
               </div>
             )}
           </div>
