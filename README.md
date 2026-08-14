@@ -61,7 +61,24 @@ npm run dev
 
 Abra [http://localhost:5173/](http://localhost:5173/) en su navegador para ver la aplicación.
 
-Para probar también la ruta `/api/drive` localmente, use `npx vercel dev` en lugar de `npm run dev`.
+Para probar también las rutas `/api/drive` y `/api/ocr` localmente, use `npx vercel dev` en lugar de `npm run dev`.
+
+## Configuración segura de Gemini OCR
+
+Gemini se invoca exclusivamente desde `/api/ocr`; las claves no se guardan en `localStorage`, no se incluyen en el bundle web y no viajan en la URL. El proxy exige la misma sesión Google y las mismas cuentas autorizadas configuradas para Drive.
+
+Configure en Vercel, para Production y Preview:
+
+```text
+GEMINI_API_KEYS=clave-1,clave-2
+GEMINI_MODEL=gemini-2.5-flash
+VITE_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+DRIVE_ALLOWED_GOOGLE_DOMAIN=upacifico.edu.py
+```
+
+`GEMINI_MODEL` es opcional. Para una sola clave puede usar `GEMINI_API_KEY`. La variable antigua `VITE_GEMINI_API_KEY` se acepta temporalmente en el servidor para facilitar la migración, pero debe renombrarse y eliminarse de los entornos del cliente. Las claves que alguna vez estuvieron incrustadas en una compilación deben revocarse y regenerarse en Google AI Studio.
+
+El modo **Solo OCR local** no realiza solicitudes a Gemini. Las fotos enviadas a Gemini se reducen en el navegador, se validan por índice en ambos extremos y solo se aceptan si los campos `Nombres`, `Apellidos`, `Carrera` y `Nro.` quedan legibles.
 
 ## Configuración de Google Drive
 

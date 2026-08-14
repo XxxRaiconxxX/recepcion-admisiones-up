@@ -139,7 +139,7 @@ export function App() {
           </>
         ) : (
           /* Sección de Cargo Masivo por Fotos con OCR */
-          <BatchCargoSection />
+          <BatchCargoSection userToken={googleUser?.idToken} />
         )}
 
       </main>

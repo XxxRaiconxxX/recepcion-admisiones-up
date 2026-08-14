@@ -17,11 +17,10 @@ import {
   FileText,
   RotateCcw,
   RotateCw,
-  Key,
   Bot
 } from 'lucide-react';
 import type { BatchCargoData, BatchCargoStudent } from '../types/batchCargo';
-import { OcrService, BATCH_CONFIG, type BatchProgressEvent } from '../lib/ocrService';
+import { OcrService, BATCH_CONFIG, type BatchProgressEvent, type OcrMode } from '../lib/ocrService';
 import { DocumentExporter } from '../lib/pdfExport';
 import { BatchCargoModal } from './BatchCargoModal';
 
@@ -35,16 +34,33 @@ const CARRERAS_OPTIONS = [
   'Posgrado'
 ];
 
-export const BatchCargoSection: React.FC = () => {
+interface BatchCargoSectionProps {
+  userToken?: string;
+}
+
+const hasRequiredFields = (student: BatchCargoStudent) =>
+  Boolean(
+    student.nombres.trim() &&
+    student.apellidos.trim() &&
+    student.carrera.trim() &&
+    student.ci?.trim(),
+  );
+
+const needsReview = (student: BatchCargoStudent) =>
+  student.extractionSource === 'local_ocr' ||
+  student.status === 'error' ||
+  student.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
+  student.nombresApellidos.includes('REVISAR') ||
+  !hasRequiredFields(student);
+
+const contractDocument = (carrera: string) =>
+  carrera.trim() ? `CONTRATO ${carrera.toUpperCase()}` : 'CONTRATO PENDIENTE';
+
+export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Clave de Gemini API para 100% de precisión
-  const [geminiApiKey, setGeminiApiKey] = useState('');
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-
-  useEffect(() => {
-    setGeminiApiKey(OcrService.getSavedGeminiKey());
-  }, []);
+  const processingAbortRef = useRef<AbortController | null>(null);
+  const studentsRef = useRef<BatchCargoStudent[]>([]);
+  const [ocrMode, setOcrMode] = useState<OcrMode>(userToken ? 'gemini' : 'local');
 
   // Metadatos del encabezado del Cargo Masivo
   const [header, setHeader] = useState({
@@ -60,6 +76,22 @@ export const BatchCargoSection: React.FC = () => {
 
   // Lista de alumnos extraídos de las fotos
   const [students, setStudents] = useState<BatchCargoStudent[]>([]);
+
+  useEffect(() => {
+    studentsRef.current = students;
+  }, [students]);
+
+  useEffect(() => {
+    if (!userToken && ocrMode === 'gemini') setOcrMode('local');
+  }, [ocrMode, userToken]);
+
+  useEffect(() => () => {
+    const controller = processingAbortRef.current;
+    processingAbortRef.current = null;
+    controller?.abort();
+    for (const student of studentsRef.current) OcrService.revokePhotoUrl(student.photoUrl);
+    void OcrService.terminateWorker();
+  }, []);
 
   // Estado del progreso por lotes
   const [batchProgress, setBatchProgress] = useState<{
@@ -86,18 +118,23 @@ export const BatchCargoSection: React.FC = () => {
   // Modal de Vista Previa A4 / Impresión / Word
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
-  // Guardar clave de Gemini
-  const handleSaveApiKey = (key: string) => {
-    setGeminiApiKey(key);
-    OcrService.saveGeminiKey(key);
-    setIsApiKeyModalOpen(false);
-  };
-
   // Manejar selección múltiple de archivos de fotos (con soporte nativo para iPhone HEIC)
   const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
+    if (!e.target.files || e.target.files.length === 0 || batchProgress.isActive) return;
 
     const rawFiles = Array.from(e.target.files);
+    e.target.value = '';
+    if (students.length + rawFiles.length > BATCH_CONFIG.MAX_FILES) {
+      alert(`El cargo admite como máximo ${BATCH_CONFIG.MAX_FILES} fotos en total.`);
+      return;
+    }
+    const invalidFile = rawFiles.find(
+      (file) => !OcrService.isSupportedImageFile(file) || file.size > BATCH_CONFIG.MAX_FILE_BYTES,
+    );
+    if (invalidFile) {
+      alert(`La foto "${invalidFile.name}" no es compatible o supera 25 MB.`);
+      return;
+    }
     const hasHeic = rawFiles.some(
       (f) =>
         f.type === 'image/heic' ||
@@ -119,42 +156,54 @@ export const BatchCargoSection: React.FC = () => {
 
     const preparedStudents: BatchCargoStudent[] = [];
 
-    for (let idx = 0; idx < rawFiles.length; idx++) {
-      const file = rawFiles[idx];
-      const converted = await OcrService.ensureJpegBlob(file);
-      const readyFile = converted instanceof File ? converted : file;
-      const readyBlobUrl = URL.createObjectURL(
-        converted instanceof Blob ? converted : file
-      );
+    try {
+      for (let idx = 0; idx < rawFiles.length; idx++) {
+        const file = rawFiles[idx];
+        const converted = await OcrService.ensureJpegBlob(file);
+        if (!(converted instanceof Blob)) throw new Error(`No se pudo preparar ${file.name}.`);
+        const readyFile = converted instanceof File
+          ? converted
+          : new File([converted], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
 
-      preparedStudents.push({
-        id: `student_${Date.now()}_${idx}`,
-        file: readyFile,
-        photoUrl: readyBlobUrl,
-        photoName: file.name.replace(/\.(heic|heif)$/i, '.jpg'),
-        rotationDegrees: 0,
-        nombresApellidos: 'EN COLA DE PROCESAMIENTO...',
-        carrera: 'Medicina',
-        documentos: ['CONTRATO MEDICINA'],
-        observacion: header.observacionGlobal,
-        status: 'pending'
-      });
+        preparedStudents.push({
+          id: crypto.randomUUID(),
+          file: readyFile,
+          photoUrl: URL.createObjectURL(readyFile),
+          photoName: readyFile.name,
+          rotationDegrees: 0,
+          nombres: '',
+          apellidos: '',
+          nombresApellidos: 'EN COLA DE PROCESAMIENTO...',
+          tipoDocumento: '',
+          ci: '',
+          carrera: '',
+          documentos: [],
+          observacion: header.observacionGlobal,
+          status: 'pending'
+        });
+      }
+    } catch (error: any) {
+      for (const student of preparedStudents) OcrService.revokePhotoUrl(student.photoUrl);
+      setBatchProgress((previous) => ({ ...previous, isActive: false }));
+      alert(error?.message || 'No se pudieron preparar las fotos.');
+      return;
     }
 
     setStudents((prev) => [...prev, ...preparedStudents]);
 
     // Iniciar procesamiento por lotes con IA
     await processBatchExecution(preparedStudents);
-
-    // Resetear input file
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
   };
 
   // Orquestación de procesamiento por lotes (Batching 6 fotos x request, concurrencia 2)
-  const processBatchExecution = async (itemsToProcess: BatchCargoStudent[]) => {
+  const processBatchExecution = async (
+    itemsToProcess: BatchCargoStudent[],
+    enhance = false,
+    mode: OcrMode = ocrMode,
+  ) => {
     if (itemsToProcess.length === 0) return;
+    const controller = new AbortController();
+    processingAbortRef.current = controller;
 
     setBatchProgress({
       isActive: true,
@@ -167,9 +216,12 @@ export const BatchCargoSection: React.FC = () => {
     });
 
     try {
-      await OcrService.processAllContractPhotosInBatches(
-        itemsToProcess,
-        (progress: BatchProgressEvent) => {
+      await OcrService.processAllContractPhotosInBatches(itemsToProcess, {
+        mode,
+        authToken: userToken,
+        signal: controller.signal,
+        enhance,
+        onProgress: (progress: BatchProgressEvent) => {
           setBatchProgress({
             isActive: progress.completedItems < progress.totalItems,
             currentBatch: progress.currentBatch,
@@ -180,7 +232,7 @@ export const BatchCargoSection: React.FC = () => {
             message: progress.message
           });
         },
-        (batchResults) => {
+        onBatchCompleted: (batchResults) => {
           // Actualización progresiva en vivo a medida que cada lote termina
           setStudents((prev) =>
             prev.map((s) => {
@@ -188,37 +240,48 @@ export const BatchCargoSection: React.FC = () => {
               if (!matched) return s;
               return {
                 ...s,
+                nombres: matched.nombres,
+                apellidos: matched.apellidos,
                 nombresApellidos: matched.nombresApellidos,
-                ci: matched.ci || s.ci || '',
+                tipoDocumento: matched.tipoDocumento,
+                ci: matched.ci || '',
                 carrera: matched.carrera,
-                documentos: [`CONTRATO ${matched.carrera.toUpperCase()}`],
-                photoUrl: matched.processedImageUrl || s.photoUrl,
+                documentos: [
+                  contractDocument(matched.carrera),
+                  ...s.documentos.filter((document) => !document.startsWith('CONTRATO')),
+                ],
                 status: matched.status,
                 extractionSource: matched.extractionSource || 'gemini',
                 errorMessage: matched.errorMessage
               };
             })
           );
-        }
-      );
+        },
+      });
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       console.error('Error general en procesamiento de lotes:', err);
+      setStudents((previous) => previous.map((student) =>
+        itemsToProcess.some((item) => item.id === student.id)
+          ? { ...student, status: 'error', errorMessage: err?.message || 'Error de procesamiento' }
+          : student,
+      ));
     } finally {
-      setBatchProgress((prev) => ({ ...prev, isActive: false, percentage: 100 }));
+      if (processingAbortRef.current === controller) {
+        processingAbortRef.current = null;
+        setBatchProgress((prev) => ({ ...prev, isActive: false, percentage: 100 }));
+      }
     }
   };
 
   // Re-procesar únicamente los alumnos que cayeron en OCR local o tuvieron error (sin tocar los ya exitosos con Gemini)
   const handleReprocessOnlyFallbackOrErrors = async () => {
-    const pendingItems = students.filter(
-      (s) =>
-        s.extractionSource === 'local_ocr' ||
-        s.status === 'error' ||
-        s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
-        s.nombresApellidos.includes('REVISAR') ||
-        s.nombresApellidos.includes('PEDRO JUAN') ||
-        s.nombresApellidos.includes('UN E PEE') ||
-        !s.nombresApellidos.trim()
+    if (!userToken) {
+      alert('Inicia sesión con Google para re-procesar pendientes con Gemini.');
+      return;
+    }
+    const pendingItems = students.filter((student) =>
+      needsReview(student) && Boolean(student.file || student.photoUrl),
     );
 
     if (pendingItems.length === 0) {
@@ -233,35 +296,49 @@ export const BatchCargoSection: React.FC = () => {
       )
     );
 
-    await processBatchExecution(pendingItems);
+    await processBatchExecution(pendingItems, true, 'gemini');
   };
 
   // Re-procesar un alumno individual específicamente con Gemini Vision
   const handleReprocessSingleStudentWithGemini = async (studentId: string) => {
     const student = students.find((s) => s.id === studentId);
     if (!student || !student.file) return;
+    if (!userToken) {
+      alert('Inicia sesión con Google para re-escanear con Gemini.');
+      return;
+    }
 
     setStudents((prev) =>
       prev.map((s) => (s.id === studentId ? { ...s, status: 'processing' } : s))
     );
 
     try {
-      const extracted = await OcrService.processContractPhoto(student.file, student.rotationDegrees || 0);
+      const extracted = await OcrService.processContractPhoto(student.file, student.rotationDegrees || 0, {
+        mode: 'gemini',
+        authToken: userToken,
+        enhance: true,
+      });
 
       setStudents((prev) =>
         prev.map((s) =>
           s.id === studentId
             ? {
                 ...s,
+                nombres: extracted.nombres,
+                apellidos: extracted.apellidos,
                 nombresApellidos: extracted.nombresApellidos,
-                ci: extracted.ci || s.ci || '',
+                tipoDocumento: extracted.tipoDocumento,
+                ci: extracted.ci || '',
                 carrera: extracted.carrera,
-                documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
+                documentos: [
+                  contractDocument(extracted.carrera),
+                  ...s.documentos.filter((document) => !document.startsWith('CONTRATO')),
+                ],
                 confidence: extracted.confidence,
                 rawText: extracted.rawText,
-                photoUrl: extracted.processedImageUrl || s.photoUrl,
-                status: 'success',
-                extractionSource: extracted.extractionSource || 'gemini'
+                status: extracted.errorMessage ? 'error' : 'success',
+                extractionSource: extracted.extractionSource,
+                errorMessage: extracted.errorMessage,
               }
             : s
         )
@@ -285,23 +362,33 @@ export const BatchCargoSection: React.FC = () => {
     );
 
     try {
-      const extracted = await OcrService.processContractPhoto(student.file, newDegrees);
+      const extracted = await OcrService.processContractPhoto(student.file, newDegrees, {
+        mode: ocrMode,
+        authToken: userToken,
+        enhance: true,
+      });
 
       setStudents((prev) =>
         prev.map((s) =>
           s.id === studentId
             ? {
                 ...s,
+                nombres: extracted.nombres,
+                apellidos: extracted.apellidos,
                 nombresApellidos: extracted.nombresApellidos,
-                ci: extracted.ci || s.ci || '',
+                tipoDocumento: extracted.tipoDocumento,
+                ci: extracted.ci || '',
                 carrera: extracted.carrera,
-                documentos: [`CONTRATO ${extracted.carrera.toUpperCase()}`],
+                documentos: [
+                  contractDocument(extracted.carrera),
+                  ...s.documentos.filter((document) => !document.startsWith('CONTRATO')),
+                ],
                 confidence: extracted.confidence,
                 rawText: extracted.rawText,
                 rotationDegrees: newDegrees,
-                photoUrl: extracted.processedImageUrl || s.photoUrl,
-                status: 'success',
-                extractionSource: extracted.extractionSource || 'gemini'
+                status: extracted.errorMessage ? 'error' : 'success',
+                extractionSource: extracted.extractionSource,
+                errorMessage: extracted.errorMessage,
               }
             : s
         )
@@ -312,7 +399,12 @@ export const BatchCargoSection: React.FC = () => {
           prev
             ? {
                 ...prev,
-                photoUrl: extracted.processedImageUrl || prev.photoUrl,
+                nombres: extracted.nombres,
+                apellidos: extracted.apellidos,
+                nombresApellidos: extracted.nombresApellidos,
+                tipoDocumento: extracted.tipoDocumento,
+                ci: extracted.ci || '',
+                carrera: extracted.carrera,
                 rotationDegrees: newDegrees
               }
             : null
@@ -330,12 +422,42 @@ export const BatchCargoSection: React.FC = () => {
     setStudents((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s;
-        if (field === 'carrera') {
-          const newDoc = `CONTRATO ${String(value).toUpperCase()}`;
-          const updatedDocs = s.documentos.map((d) => (d.startsWith('CONTRATO') ? newDoc : d));
-          return { ...s, carrera: value, documentos: updatedDocs };
+        if (field === 'nombres' || field === 'apellidos') {
+          const next = { ...s, [field]: String(value).toUpperCase() };
+          const updated = {
+            ...next,
+            nombresApellidos: `${next.nombres} ${next.apellidos}`.replace(/\s+/g, ' ').trim(),
+            extractionSource: 'manual' as const,
+          };
+          return {
+            ...updated,
+            status: hasRequiredFields(updated) ? 'success' : 'error',
+            errorMessage: hasRequiredFields(updated) ? undefined : updated.errorMessage,
+          };
         }
-        return { ...s, [field]: value };
+        if (field === 'carrera') {
+          const newDoc = contractDocument(String(value));
+          const updatedDocs = s.documentos.map((d) => (d.startsWith('CONTRATO') ? newDoc : d));
+          const updated = {
+            ...s,
+            carrera: value,
+            documentos: updatedDocs.some((document) => document.startsWith('CONTRATO'))
+              ? updatedDocs
+              : [newDoc, ...updatedDocs],
+            extractionSource: 'manual' as const,
+          };
+          return {
+            ...updated,
+            status: hasRequiredFields(updated) ? 'success' : 'error',
+            errorMessage: hasRequiredFields(updated) ? undefined : updated.errorMessage,
+          };
+        }
+        const updated = { ...s, [field]: value, extractionSource: 'manual' as const };
+        return {
+          ...updated,
+          status: hasRequiredFields(updated) ? 'success' : 'error',
+          errorMessage: hasRequiredFields(updated) ? undefined : updated.errorMessage,
+        };
       })
     );
   };
@@ -356,22 +478,40 @@ export const BatchCargoSection: React.FC = () => {
 
   // Eliminar estudiante de la lista
   const removeStudent = (id: string) => {
-    setStudents((prev) => prev.filter((s) => s.id !== id));
+    setStudents((prev) => {
+      const removed = prev.find((student) => student.id === id);
+      if (removed) OcrService.revokePhotoUrl(removed.photoUrl);
+      return prev.filter((student) => student.id !== id);
+    });
+    if (selectedPhotoStudent?.id === id) setSelectedPhotoStudent(null);
+  };
+
+  const clearStudents = () => {
+    processingAbortRef.current?.abort();
+    processingAbortRef.current = null;
+    for (const student of students) OcrService.revokePhotoUrl(student.photoUrl);
+    setSelectedPhotoStudent(null);
+    setStudents([]);
+    setBatchProgress((previous) => ({ ...previous, isActive: false }));
   };
 
   // Agregar fila manual
   const handleAddManualRow = () => {
     const newStudent: BatchCargoStudent = {
-      id: `manual_${Date.now()}`,
+      id: crypto.randomUUID(),
       photoName: 'Entrada Manual',
       photoUrl: '',
       rotationDegrees: 0,
+      nombres: '',
+      apellidos: '',
       nombresApellidos: '',
+      tipoDocumento: 'CÉDULA DE IDENTIDAD',
       ci: '',
-      carrera: 'Medicina',
-      documentos: ['CONTRATO MEDICINA'],
+      carrera: '',
+      documentos: ['CONTRATO PENDIENTE'],
       observacion: header.observacionGlobal,
-      status: 'success'
+      status: 'error',
+      extractionSource: 'manual',
     };
     setStudents((prev) => [...prev, newStudent]);
   };
@@ -381,6 +521,9 @@ export const BatchCargoSection: React.FC = () => {
     header,
     students
   };
+  const hasInvalidStudents = students.some((student) =>
+    student.status === 'error' || !hasRequiredFields(student),
+  );
 
   // Descarga directa en Word
   const handleDownloadWord = () => {
@@ -401,22 +544,34 @@ export const BatchCargoSection: React.FC = () => {
               </h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Procesamiento optimizado en lotes de {BATCH_CONFIG.BATCH_SIZE} contratos con redimensionamiento a 1024px para máxima velocidad y eficiencia.
+              Lotes de {BATCH_CONFIG.BATCH_SIZE} contratos, imágenes de hasta {BATCH_CONFIG.MAX_IMAGE_DIMENSION}px y validación estricta por foto.
             </p>
           </div>
 
-          {/* Motor de Extracción y API Key */}
+          {/* Motor de extracción */}
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => setIsApiKeyModalOpen(true)}
+              onClick={() => userToken ? setOcrMode('gemini') : alert('Inicia sesión con Google para usar Gemini.')}
+              disabled={batchProgress.isActive}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer ${
-                geminiApiKey
+                ocrMode === 'gemini' && userToken
                   ? 'bg-emerald-950/70 border-emerald-600/80 text-emerald-300 shadow-sm'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
               }`}
             >
-              <Bot className={`w-4 h-4 ${geminiApiKey ? 'text-emerald-400' : 'text-slate-400'}`} />
-              {geminiApiKey ? 'IA Vision Activa (100% Precisión)' : 'Configurar Gemini Vision AI'}
+              <Bot className={`w-4 h-4 ${ocrMode === 'gemini' ? 'text-emerald-400' : 'text-slate-400'}`} />
+              Gemini seguro {userToken ? '' : '(requiere Google)'}
+            </button>
+            <button
+              onClick={() => setOcrMode('local')}
+              disabled={batchProgress.isActive}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                ocrMode === 'local'
+                  ? 'bg-amber-950/70 border-amber-600/80 text-amber-300'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+              }`}
+            >
+              Solo OCR local
             </button>
 
             <span className="bg-slate-800 border border-slate-700 px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold text-amber-300">
@@ -493,6 +648,7 @@ export const BatchCargoSection: React.FC = () => {
           ref={fileInputRef}
           onChange={handleFilesSelected}
           multiple
+          disabled={batchProgress.isActive}
           accept="image/*,.heic,.heif,.HEIC,.HEIF"
           className="hidden"
           id="batch-contract-photos"
@@ -508,13 +664,16 @@ export const BatchCargoSection: React.FC = () => {
               Sube o Arrastra las Fotos de los Contratos
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Carga de 1 a 50+ fotos juntas. Se procesan por lotes estructurados en paralelo (~15 a 25 seg para 30 fotos).
+              Carga de 1 a {BATCH_CONFIG.MAX_FILES} fotos, hasta 25 MB por archivo. No se inician cargas superpuestas.
             </p>
           </div>
 
           <label
             htmlFor="batch-contract-photos"
-            className="inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer transition-all hover:shadow-lg"
+            aria-disabled={batchProgress.isActive}
+            className={`inline-flex items-center gap-2 px-6 py-2.5 text-white text-xs font-bold rounded-xl shadow-md transition-all ${
+              batchProgress.isActive ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 cursor-pointer hover:shadow-lg'
+            }`}
           >
             <ImageIcon className="w-4 h-4" />
             Seleccionar Fotos de Contratos (Lote)
@@ -562,16 +721,7 @@ export const BatchCargoSection: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {students.filter(
-                (s) =>
-                  s.extractionSource === 'local_ocr' ||
-                  s.status === 'error' ||
-                  s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
-                  s.nombresApellidos.includes('REVISAR') ||
-                  s.nombresApellidos.includes('PEDRO JUAN') ||
-                  s.nombresApellidos.includes('UN E PEE') ||
-                  !s.nombresApellidos.trim()
-              ).length > 0 && (
+              {students.filter((student) => needsReview(student) && Boolean(student.file || student.photoUrl)).length > 0 && (
                 <button
                   onClick={handleReprocessOnlyFallbackOrErrors}
                   disabled={batchProgress.isActive}
@@ -580,22 +730,13 @@ export const BatchCargoSection: React.FC = () => {
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
                   Re-procesar solo OCR/Pendientes con Gemini ({
-                    students.filter(
-                      (s) =>
-                        s.extractionSource === 'local_ocr' ||
-                        s.status === 'error' ||
-                        s.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
-                        s.nombresApellidos.includes('REVISAR') ||
-                        s.nombresApellidos.includes('PEDRO JUAN') ||
-                        s.nombresApellidos.includes('UN E PEE') ||
-                        !s.nombresApellidos.trim()
-                    ).length
+                    students.filter((student) => needsReview(student) && Boolean(student.file || student.photoUrl)).length
                   })
                 </button>
               )}
 
               <button
-                onClick={() => processBatchExecution(students)}
+                onClick={() => processBatchExecution(students.filter((student) => student.file || student.photoUrl))}
                 disabled={batchProgress.isActive}
                 className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-slate-300 cursor-pointer"
                 title="Volver a procesar todas las fotos en lotes desde cero"
@@ -611,7 +752,7 @@ export const BatchCargoSection: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setStudents([])}
+                onClick={clearStudents}
                 className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all border border-red-200 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" /> Limpiar Todo
@@ -635,7 +776,7 @@ export const BatchCargoSection: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
                 {students.map((student, idx) => {
-                  const contratoNombre = `CONTRATO ${student.carrera.toUpperCase()}`;
+                  const contratoNombre = contractDocument(student.carrera);
 
                   return (
                     <tr key={student.id} className="hover:bg-slate-50/80 transition-colors">
@@ -650,6 +791,7 @@ export const BatchCargoSection: React.FC = () => {
                           <div className="flex items-center justify-center gap-1.5">
                             <button
                               onClick={() => handleRotateAndReprocess(student.id, -90)}
+                              disabled={batchProgress.isActive}
                               className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
                               title="Girar 90° Izquierda y Re-escanear"
                             >
@@ -665,6 +807,7 @@ export const BatchCargoSection: React.FC = () => {
                                 src={student.photoUrl}
                                 alt="Contrato"
                                 className="w-full h-full object-cover"
+                                style={{ transform: `rotate(${student.rotationDegrees || 0}deg)` }}
                               />
                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
                                 <Eye className="w-3.5 h-3.5" />
@@ -673,6 +816,7 @@ export const BatchCargoSection: React.FC = () => {
 
                             <button
                               onClick={() => handleRotateAndReprocess(student.id, 90)}
+                              disabled={batchProgress.isActive}
                               className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
                               title="Girar 90° Derecha y Re-escanear"
                             >
@@ -687,27 +831,58 @@ export const BatchCargoSection: React.FC = () => {
                       {/* Nombres y Apellidos + CI Editables */}
                       <td className="py-2.5 px-3">
                         <div className="space-y-1.5">
-                          <div>
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-1.5">
                             <input
                               type="text"
-                              value={student.nombresApellidos}
+                              value={student.nombres}
                               onChange={(e) =>
-                                updateStudentField(student.id, 'nombresApellidos', e.target.value.toUpperCase())
+                                updateStudentField(student.id, 'nombres', e.target.value)
                               }
                               className={`w-full px-2.5 py-1.5 rounded-lg border font-bold text-xs outline-none focus:ring-2 ${
                                 student.extractionSource === 'local_ocr' || student.status === 'error'
                                   ? 'border-amber-400 bg-amber-50/30 text-slate-900 focus:ring-amber-500'
                                   : 'border-slate-300 text-slate-900 focus:ring-blue-600'
                               }`}
-                              placeholder="EJ: PABLA MARGARITA TROCHE FERNANDEZ"
+                              placeholder="Nombres"
+                            />
+                            <input
+                              type="text"
+                              value={student.apellidos}
+                              onChange={(e) => updateStudentField(student.id, 'apellidos', e.target.value)}
+                              className={`w-full px-2.5 py-1.5 rounded-lg border font-bold text-xs outline-none focus:ring-2 ${
+                                student.extractionSource === 'local_ocr' || student.status === 'error'
+                                  ? 'border-amber-400 bg-amber-50/30 text-slate-900 focus:ring-amber-500'
+                                  : 'border-slate-300 text-slate-900 focus:ring-blue-600'
+                              }`}
+                              placeholder="Apellidos"
                             />
                           </div>
 
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 flex-1">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">
-                                C.I. N°:
-                              </span>
+                          <div className="text-[10px] text-slate-500 font-semibold truncate" title={student.nombresApellidos}>
+                            {student.nombresApellidos || 'NOMBRE COMPLETO PENDIENTE'}
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 flex-1 min-w-[280px]">
+                              <select
+                                value={student.tipoDocumento || ''}
+                                onChange={(e) => updateStudentField(student.id, 'tipoDocumento', e.target.value)}
+                                className="max-w-[150px] px-1.5 py-0.5 rounded border border-slate-200 text-[10px] text-slate-700"
+                              >
+                                <option value="">Tipo documento</option>
+                                {student.tipoDocumento && ![
+                                  'CÉDULA DE IDENTIDAD',
+                                  'PASAPORTE',
+                                  'DNI',
+                                  'OTRO',
+                                ].includes(student.tipoDocumento) && (
+                                  <option value={student.tipoDocumento}>{student.tipoDocumento}</option>
+                                )}
+                                <option value="CÉDULA DE IDENTIDAD">Cédula</option>
+                                <option value="PASAPORTE">Pasaporte</option>
+                                <option value="DNI">DNI</option>
+                                <option value="OTRO">Otro</option>
+                              </select>
                               <input
                                 type="text"
                                 value={student.ci || ''}
@@ -715,7 +890,7 @@ export const BatchCargoSection: React.FC = () => {
                                   updateStudentField(student.id, 'ci', e.target.value)
                                 }
                                 className="w-full max-w-[140px] px-2 py-0.5 rounded border border-slate-200 font-mono text-[11px] text-slate-800 focus:ring-2 focus:ring-blue-600 outline-none"
-                                placeholder="Ej: 7261797"
+                                placeholder="Nro.: 6153879 / PA-12345"
                               />
                             </div>
 
@@ -727,13 +902,11 @@ export const BatchCargoSection: React.FC = () => {
                                 </span>
                               )}
 
-                              {(student.extractionSource === 'local_ocr' ||
-                                student.status === 'error' ||
-                                student.nombresApellidos === 'ALUMNO POR CONFIRMAR' ||
-                                student.nombresApellidos.includes('REVISAR')) && (
+                              {needsReview(student) && (
                                 <button
                                   type="button"
                                   onClick={() => handleReprocessSingleStudentWithGemini(student.id)}
+                                  disabled={batchProgress.isActive}
                                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold border border-amber-300 transition-colors cursor-pointer"
                                   title="Re-analizar este contrato individual con Gemini AI"
                                 >
@@ -759,6 +932,10 @@ export const BatchCargoSection: React.FC = () => {
                           onChange={(e) => updateStudentField(student.id, 'carrera', e.target.value)}
                           className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-800 bg-white focus:ring-2 focus:ring-blue-600 outline-none"
                         >
+                          <option value="">Seleccionar carrera</option>
+                          {student.carrera && !CARRERAS_OPTIONS.includes(student.carrera) && (
+                            <option value={student.carrera}>{student.carrera}</option>
+                          )}
                           {CARRERAS_OPTIONS.map((c) => (
                             <option key={c} value={c}>
                               {c}
@@ -859,6 +1036,7 @@ export const BatchCargoSection: React.FC = () => {
                       <td className="py-2.5 px-3 text-center">
                         <button
                           onClick={() => removeStudent(student.id)}
+                          disabled={batchProgress.isActive}
                           className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
                           title="Eliminar alumno"
                         >
@@ -882,7 +1060,9 @@ export const BatchCargoSection: React.FC = () => {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleDownloadWord}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer"
+                disabled={hasInvalidStudents}
+                title={hasInvalidStudents ? 'Corrige los campos pendientes antes de exportar.' : undefined}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:bg-slate-400 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
                 Descargar Cargo Masivo en Word (.docx)
@@ -890,7 +1070,9 @@ export const BatchCargoSection: React.FC = () => {
 
               <button
                 onClick={() => setIsPreviewModalOpen(true)}
-                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+                disabled={hasInvalidStudents}
+                title={hasInvalidStudents ? 'Corrige los campos pendientes antes de imprimir.' : undefined}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Printer className="w-4 h-4" />
                 Ver y Generar Cargo Masivo (Vista Previa A4)
@@ -941,70 +1123,8 @@ export const BatchCargoSection: React.FC = () => {
                 src={selectedPhotoStudent.photoUrl}
                 alt="Foto ampliada del contrato"
                 className="max-h-[70vh] w-auto mx-auto object-contain rounded-xl shadow-lg border border-slate-800"
+                style={{ transform: `rotate(${selectedPhotoStudent.rotationDegrees || 0}deg)` }}
               />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Configuración de Gemini API Key */}
-      {isApiKeyModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-2xl p-6 shadow-2xl space-y-4 text-white">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Key className="w-5 h-5 text-amber-400" />
-                <h3 className="text-base font-bold">Configurar Gemini Vision AI</h3>
-              </div>
-              <button
-                onClick={() => setIsApiKeyModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Google Gemini Vision procesa en <strong>lotes estructurados de {BATCH_CONFIG.BATCH_SIZE} imágenes</strong> con respuesta JSON validada y máxima precisión.
-            </p>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
-                Gemini API Key
-              </label>
-              <input
-                type="password"
-                value={geminiApiKey}
-                onChange={(e) => setGeminiApiKey(e.target.value)}
-                placeholder="AIzaSy..."
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:border-blue-500 outline-none"
-              />
-              <p className="text-[11px] text-slate-400 mt-1">
-                Consigue tu clave en{' '}
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-400 underline"
-                >
-                  aistudio.google.com/app/apikey
-                </a>
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
-              <button
-                onClick={() => handleSaveApiKey('')}
-                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
-              >
-                Usar Solo OCR Local
-              </button>
-              <button
-                onClick={() => handleSaveApiKey(geminiApiKey)}
-                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md cursor-pointer"
-              >
-                Guardar y Activar
-              </button>
             </div>
           </div>
         </div>

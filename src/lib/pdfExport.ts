@@ -92,7 +92,7 @@ export class DocumentExporter {
               min-height: 275mm !important;
               height: auto !important;
               padding: 0 !important;
-              margin: 0 0 10mm 0 !important;
+              margin: 0 !important;
               display: flex !important;
               flex-direction: column !important;
               justify-content: space-between !important;
@@ -386,7 +386,7 @@ export class DocumentExporter {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `C.I. N°: ${student.ci}`,
+                  text: `${student.tipoDocumento?.includes('PASAPORTE') ? 'PASAPORTE N°' : student.tipoDocumento?.includes('DNI') ? 'DNI N°' : 'C.I. N°'}: ${student.ci}`,
                   size: 18,
                   color: '555555',
                 }),

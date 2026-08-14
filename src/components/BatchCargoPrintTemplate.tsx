@@ -1,5 +1,6 @@
 import React from 'react';
-import type { BatchCargoData, BatchCargoStudent } from '../types/batchCargo';
+import type { BatchCargoData } from '../types/batchCargo';
+import { paginateBatchCargoItems } from '../lib/batchCargoPagination';
 
 interface BatchCargoPrintTemplateProps {
   batchData: BatchCargoData;
@@ -8,42 +9,7 @@ interface BatchCargoPrintTemplateProps {
 export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = ({ batchData }) => {
   const { header, students } = batchData;
 
-  // Paginación continua inteligente y compacta
-  // Permite agrupar muchos más alumnos por hoja y continúa limpiamente en las hojas siguientes.
-  const paginateStudents = (items: BatchCargoStudent[]) => {
-    if (items.length === 0) return [[]];
-
-    // Si entran todos en 1 sola hoja con firmas (hasta 10 alumnos)
-    if (items.length <= 10) {
-      return [items];
-    }
-
-    const pages: BatchCargoStudent[][] = [];
-    let currentIdx = 0;
-
-    // Hoja 1: Encabezado formal + 10 alumnos
-    const page1Count = Math.min(items.length, 10);
-    pages.push(items.slice(0, page1Count));
-    currentIdx += page1Count;
-
-    // Hojas siguientes (Hojas intermedias y final)
-    while (currentIdx < items.length) {
-      const remaining = items.length - currentIdx;
-      // Si los restantes entran cómodamente en la hoja final con firmas (hasta 15 alumnos)
-      if (remaining <= 15) {
-        pages.push(items.slice(currentIdx));
-        break;
-      }
-      // Hojas intermedias sin firmas: entran hasta 16 alumnos
-      const batchCount = 16;
-      pages.push(items.slice(currentIdx, currentIdx + batchCount));
-      currentIdx += batchCount;
-    }
-
-    return pages;
-  };
-
-  const studentPages = paginateStudents(students);
+  const studentPages = paginateBatchCargoItems(students);
   const totalPages = studentPages.length;
 
   return (
@@ -133,12 +99,20 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
                         : [`CONTRATO ${student.carrera.toUpperCase()}`];
 
                       return (
-                        <tr key={student.id || sIdx} className="align-top hover:bg-slate-50">
+                        <tr
+                          key={student.id || sIdx}
+                          className="align-top hover:bg-slate-50 break-inside-avoid"
+                          style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
+                        >
                           <td className="p-1.5 border-r border-slate-900 font-bold uppercase text-slate-900 text-[10px]" style={{ overflowWrap: 'anywhere' }}>
                             <div>{student.nombresApellidos}</div>
                             {student.ci && (
                               <div className="text-[9px] text-slate-700 font-mono font-normal mt-0.5">
-                                C.I. N°: {student.ci}
+                                {student.tipoDocumento?.includes('PASAPORTE')
+                                  ? 'PASAPORTE N°'
+                                  : student.tipoDocumento?.includes('DNI')
+                                    ? 'DNI N°'
+                                    : 'C.I. N°'}: {student.ci}
                               </div>
                             )}
                           </td>
