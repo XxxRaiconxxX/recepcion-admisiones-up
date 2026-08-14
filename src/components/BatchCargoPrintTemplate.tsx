@@ -13,15 +13,15 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
   const paginateStudents = (items: BatchCargoStudent[]) => {
     if (items.length === 0) return [[]];
 
-    // Si entran todos en 1 sola hoja con firmas (hasta 9 alumnos)
-    if (items.length <= 9) {
+    // Si entran todos en 1 sola hoja con firmas (hasta 10 alumnos)
+    if (items.length <= 10) {
       return [items];
     }
 
     const pages: BatchCargoStudent[][] = [];
     let currentIdx = 0;
 
-    // Hoja 1: Encabezado formal + hasta 10 alumnos
+    // Hoja 1: Encabezado formal + 10 alumnos
     const page1Count = Math.min(items.length, 10);
     pages.push(items.slice(0, page1Count));
     currentIdx += page1Count;
@@ -29,8 +29,8 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
     // Hojas siguientes (Hojas intermedias y final)
     while (currentIdx < items.length) {
       const remaining = items.length - currentIdx;
-      // Si los restantes entran cómodamente en la hoja final con firmas (hasta 13 alumnos)
-      if (remaining <= 13) {
+      // Si los restantes entran cómodamente en la hoja final con firmas (hasta 15 alumnos)
+      if (remaining <= 15) {
         pages.push(items.slice(currentIdx));
         break;
       }
@@ -47,7 +47,7 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
   const totalPages = studentPages.length;
 
   return (
-    <div id="print-batch-cargo-content" className="space-y-6 print:space-y-0 text-black font-sans">
+    <div id="print-batch-cargo-content" className="space-y-6 print:space-y-0 text-black font-sans w-full">
       {studentPages.map((pageStudents, pageIdx) => {
         const isFirstPage = pageIdx === 0;
         const isLastPage = pageIdx === totalPages - 1;
@@ -55,7 +55,7 @@ export const BatchCargoPrintTemplate: React.FC<BatchCargoPrintTemplateProps> = (
         return (
           <div
             key={pageIdx}
-            className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-7 text-black font-sans text-[10pt] leading-tight border border-slate-300 shadow-lg rounded-sm flex flex-col justify-between print:border-none print:shadow-none print:p-0 print:min-h-0 print:page-break-after"
+            className="batch-cargo-a4-page w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-7 text-black font-sans text-[10pt] leading-tight border border-slate-300 shadow-lg rounded-sm flex flex-col justify-between"
           >
             <div>
               {/* Encabezado N° Promoción y Paginación */}

@@ -57,11 +57,54 @@ export class DocumentExporter {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Imprimir Comprobante</title>
+          <title>Imprimir Cargo de Entrega</title>
           ${styles}
           <style>
-            body { background: white !important; padding: 15mm !important; margin: 0 !important; }
-            @page { size: A4 portrait; margin: 10mm; }
+            @page {
+              size: A4 portrait;
+              margin: 10mm 10mm 10mm 10mm;
+            }
+            *, *:before, *:after {
+              box-sizing: border-box !important;
+            }
+            html, body {
+              background: white !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              width: 100% !important;
+              font-family: Arial, sans-serif !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            #print-batch-cargo-content {
+              width: 100% !important;
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+            .batch-cargo-a4-page {
+              page-break-after: always !important;
+              break-after: page !important;
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+              box-sizing: border-box !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              min-height: 275mm !important;
+              height: auto !important;
+              padding: 0 !important;
+              margin: 0 0 10mm 0 !important;
+              display: flex !important;
+              flex-direction: column !important;
+              justify-content: space-between !important;
+              border: none !important;
+              box-shadow: none !important;
+            }
+            .batch-cargo-a4-page:last-child,
+            .batch-cargo-a4-page:last-of-type {
+              page-break-after: auto !important;
+              break-after: auto !important;
+              margin-bottom: 0 !important;
+            }
           </style>
         </head>
         <body>
@@ -71,7 +114,7 @@ export class DocumentExporter {
               setTimeout(function() {
                 window.print();
                 window.close();
-              }, 500);
+              }, 400);
             };
           </script>
         </body>
