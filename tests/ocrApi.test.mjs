@@ -1,23 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('el proxy OCR autentica, valida el lote y mantiene las claves fuera de URL y respuesta', async () => {
+test('el proxy OCR funciona sin Google, limita abuso y mantiene las claves fuera del cliente', async () => {
   process.env.GEMINI_API_KEYS = 'server-key-a,server-key-b';
   process.env.GEMINI_MODEL = 'gemini-2.5-flash';
-  process.env.VITE_GOOGLE_CLIENT_ID = 'web-client.apps.googleusercontent.com';
-  process.env.DRIVE_ALLOWED_GOOGLE_DOMAIN = 'upacifico.edu.py';
 
   const originalFetch = globalThis.fetch;
-  const { OAuth2Client } = await import('google-auth-library');
-  const originalVerifyIdToken = OAuth2Client.prototype.verifyIdToken;
-  OAuth2Client.prototype.verifyIdToken = async () => ({
-    getPayload: () => ({
-      email: 'recepcion@upacifico.edu.py',
-      email_verified: true,
-      hd: 'upacifico.edu.py',
-    }),
-  });
-
   const upstreamResults = [{
     index: 0,
     nombres: 'MARIA ELENA',
@@ -42,18 +30,23 @@ test('el proxy OCR autentica, valida el lote y mantiene las claves fuera de URL 
   const payload = { images: [{ index: 0, data: 'AA==' }], keySlot: 1 };
 
   try {
-    const noToken = await handler.fetch(new Request('https://recepcion.example/api/ocr', {
+    const crossOrigin = await handler.fetch(new Request('https://recepcion.example/api/ocr', {
       method: 'POST',
-      headers: { Origin: 'https://recepcion.example' },
+      headers: {
+        Origin: 'https://otro.example',
+        'Sec-Fetch-Site': 'cross-site',
+        'X-Forwarded-For': '192.0.2.1',
+      },
       body: JSON.stringify(payload),
     }));
-    assert.equal(noToken.status, 401);
+    assert.equal(crossOrigin.status, 403);
 
     const invalid = await handler.fetch(new Request('https://recepcion.example/api/ocr', {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer google-id-token',
         Origin: 'https://recepcion.example',
+        'Sec-Fetch-Site': 'same-origin',
+        'X-Forwarded-For': '192.0.2.2',
       },
       body: JSON.stringify({ images: [{ data: 'AA==' }] }),
     }));
@@ -62,9 +55,10 @@ test('el proxy OCR autentica, valida el lote y mantiene las claves fuera de URL 
     const response = await handler.fetch(new Request('https://recepcion.example/api/ocr', {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer google-id-token',
         'Content-Type': 'application/json',
         Origin: 'https://recepcion.example',
+        'Sec-Fetch-Site': 'same-origin',
+        'X-Forwarded-For': '192.0.2.3',
       },
       body: JSON.stringify(payload),
     }));
@@ -74,6 +68,7 @@ test('el proxy OCR autentica, valida el lote y mantiene las claves fuera de URL 
     assert.equal(body.status, 'success');
     assert.deepEqual(body.results, upstreamResults);
     assert.equal(upstreamOptions.headers['x-goog-api-key'], 'server-key-b');
+    assert.equal(upstreamOptions.headers.Authorization, undefined);
     assert.doesNotMatch(upstreamUrl, /key=/i);
     assert.doesNotMatch(JSON.stringify(body), /server-key/);
 
@@ -82,12 +77,25 @@ test('el proxy OCR autentica, valida el lote y mantiene las claves fuera de URL 
     assert.equal(upstreamBody.generationConfig.responseSchema.type, 'array');
     assert.equal(upstreamBody.contents[0].parts[1].text, 'IMAGE_INDEX: 0');
     assert.equal(upstreamBody.contents[0].parts[2].inlineData.mimeType, 'image/jpeg');
+
+    let limitedResponse;
+    for (let attempt = 0; attempt < 70; attempt++) {
+      limitedResponse = await handler.fetch(new Request('https://recepcion.example/api/ocr', {
+        method: 'POST',
+        headers: {
+          Origin: 'https://recepcion.example',
+          'Sec-Fetch-Site': 'same-origin',
+          'X-Forwarded-For': '192.0.2.60',
+        },
+        body: JSON.stringify({ images: [] }),
+      }));
+      if (limitedResponse.status === 429) break;
+    }
+    assert.equal(limitedResponse.status, 429);
+    assert.ok(Number(limitedResponse.headers.get('retry-after')) > 0);
   } finally {
     globalThis.fetch = originalFetch;
-    OAuth2Client.prototype.verifyIdToken = originalVerifyIdToken;
     delete process.env.GEMINI_API_KEYS;
     delete process.env.GEMINI_MODEL;
-    delete process.env.VITE_GOOGLE_CLIENT_ID;
-    delete process.env.DRIVE_ALLOWED_GOOGLE_DOMAIN;
   }
 });

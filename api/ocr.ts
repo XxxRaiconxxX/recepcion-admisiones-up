@@ -1,15 +1,15 @@
-import { OAuth2Client } from 'google-auth-library';
-
 const MAX_BODY_LENGTH = 4_300_000;
 const MAX_IMAGES = 6;
 const MAX_IMAGE_BASE64_LENGTH = 600_000;
 const UPSTREAM_TIMEOUT_MS = 22_000;
-const googleVerifier = new OAuth2Client();
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 60;
+const rateLimitByIp = new Map<string, { count: number; resetAt: number }>();
 
-const json = (body: unknown, status = 200) =>
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   Response.json(body, {
     status,
-    headers: { 'Cache-Control': 'no-store' },
+    headers: { 'Cache-Control': 'no-store', ...headers },
   });
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -90,57 +90,50 @@ const hasStrictResults = (value: unknown, expectedLength: number) => {
   }) && seen.size === expectedLength;
 };
 
-const authorize = async (request: Request) => {
-  const googleClientId = (process.env.VITE_GOOGLE_CLIENT_ID || '').trim();
-  const allowedDomain = (process.env.DRIVE_ALLOWED_GOOGLE_DOMAIN || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^@/, '');
-  const allowedEmails = new Set(
-    (process.env.DRIVE_ALLOWED_GOOGLE_EMAILS || '')
-      .split(',')
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  );
-
-  if (!googleClientId || (!allowedDomain && allowedEmails.size === 0)) {
-    return json(
-      { status: 'error', message: 'No se configuraron las cuentas autorizadas para OCR.' },
-      500,
-    );
-  }
-
-  const token = request.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
-  if (!token) {
-    return json(
-      { status: 'error', message: 'Inicia sesión con una cuenta Google autorizada para usar Gemini.' },
-      401,
-    );
-  }
-
+const validateRequestSource = (request: Request) => {
+  const origin = request.headers.get('origin');
+  const fetchSite = request.headers.get('sec-fetch-site');
   try {
-    const ticket = await googleVerifier.verifyIdToken({ idToken: token, audience: googleClientId });
-    const profile = ticket.getPayload();
-    const email = typeof profile?.email === 'string' ? profile.email.trim().toLowerCase() : '';
-    const hostedDomain = typeof profile?.hd === 'string' ? profile.hd.trim().toLowerCase() : '';
-    const authorized =
-      profile?.email_verified === true &&
-      (allowedEmails.has(email) || (allowedDomain && hostedDomain === allowedDomain));
-
-    if (!authorized) {
-      return json(
-        { status: 'error', message: 'Esta cuenta Google no está autorizada para usar OCR.' },
-        403,
-      );
+    if (!origin || new URL(origin).host !== new URL(request.url).host) {
+      return json({ status: 'error', message: 'Origen no permitido.' }, 403);
     }
   } catch {
-    return json(
-      { status: 'error', message: 'La sesión de Google venció o no es válida.' },
-      401,
-    );
+    return json({ status: 'error', message: 'Origen no permitido.' }, 403);
   }
-
+  if (fetchSite && fetchSite !== 'same-origin') {
+    return json({ status: 'error', message: 'Origen no permitido.' }, 403);
+  }
   return null;
+};
+
+const enforceRateLimit = (request: Request) => {
+  const now = Date.now();
+  const forwardedFor =
+    request.headers.get('x-vercel-forwarded-for') ||
+    request.headers.get('x-forwarded-for') ||
+    request.headers.get('x-real-ip') ||
+    'unknown';
+  const ip = forwardedFor.split(',')[0].trim() || 'unknown';
+  const current = rateLimitByIp.get(ip);
+  const entry = !current || current.resetAt <= now
+    ? { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS }
+    : { count: current.count + 1, resetAt: current.resetAt };
+  rateLimitByIp.set(ip, entry);
+
+  // ponytail: límite por instancia; si aumenta el tráfico, moverlo a Vercel WAF para conteo distribuido.
+  if (rateLimitByIp.size > 1_000) {
+    for (const [key, value] of rateLimitByIp) {
+      if (value.resetAt <= now) rateLimitByIp.delete(key);
+    }
+  }
+  if (entry.count <= RATE_LIMIT_MAX_REQUESTS) return null;
+
+  const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  return json(
+    { status: 'error', message: 'Demasiadas solicitudes OCR. Intenta nuevamente en unos minutos.' },
+    429,
+    { 'Retry-After': String(retryAfter) },
+  );
 };
 
 const prompt = `
@@ -200,17 +193,10 @@ export default {
       return json({ status: 'error', message: 'Método no permitido.' }, 405);
     }
 
-    const origin = request.headers.get('origin');
-    try {
-      if (origin && new URL(origin).host !== new URL(request.url).host) {
-        return json({ status: 'error', message: 'Origen no permitido.' }, 403);
-      }
-    } catch {
-      return json({ status: 'error', message: 'Origen no permitido.' }, 403);
-    }
-
-    const authError = await authorize(request);
-    if (authError) return authError;
+    const sourceError = validateRequestSource(request);
+    if (sourceError) return sourceError;
+    const rateLimitError = enforceRateLimit(request);
+    if (rateLimitError) return rateLimitError;
 
     const keys = getGeminiKeys();
     if (keys.length === 0) {

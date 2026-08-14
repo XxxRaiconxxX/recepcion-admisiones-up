@@ -34,10 +34,6 @@ const CARRERAS_OPTIONS = [
   'Posgrado'
 ];
 
-interface BatchCargoSectionProps {
-  userToken?: string;
-}
-
 const hasRequiredFields = (student: BatchCargoStudent) =>
   Boolean(
     student.nombres.trim() &&
@@ -56,11 +52,11 @@ const needsReview = (student: BatchCargoStudent) =>
 const contractDocument = (carrera: string) =>
   carrera.trim() ? `CONTRATO ${carrera.toUpperCase()}` : 'CONTRATO PENDIENTE';
 
-export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken }) => {
+export const BatchCargoSection: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const processingAbortRef = useRef<AbortController | null>(null);
   const studentsRef = useRef<BatchCargoStudent[]>([]);
-  const [ocrMode, setOcrMode] = useState<OcrMode>(userToken ? 'gemini' : 'local');
+  const [ocrMode, setOcrMode] = useState<OcrMode>('gemini');
 
   // Metadatos del encabezado del Cargo Masivo
   const [header, setHeader] = useState({
@@ -80,10 +76,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
   useEffect(() => {
     studentsRef.current = students;
   }, [students]);
-
-  useEffect(() => {
-    if (!userToken && ocrMode === 'gemini') setOcrMode('local');
-  }, [ocrMode, userToken]);
 
   useEffect(() => () => {
     const controller = processingAbortRef.current;
@@ -218,7 +210,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
     try {
       await OcrService.processAllContractPhotosInBatches(itemsToProcess, {
         mode,
-        authToken: userToken,
         signal: controller.signal,
         enhance,
         onProgress: (progress: BatchProgressEvent) => {
@@ -276,10 +267,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
 
   // Re-procesar únicamente los alumnos que cayeron en OCR local o tuvieron error (sin tocar los ya exitosos con Gemini)
   const handleReprocessOnlyFallbackOrErrors = async () => {
-    if (!userToken) {
-      alert('Inicia sesión con Google para re-procesar pendientes con Gemini.');
-      return;
-    }
     const pendingItems = students.filter((student) =>
       needsReview(student) && Boolean(student.file || student.photoUrl),
     );
@@ -303,10 +290,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
   const handleReprocessSingleStudentWithGemini = async (studentId: string) => {
     const student = students.find((s) => s.id === studentId);
     if (!student || !student.file) return;
-    if (!userToken) {
-      alert('Inicia sesión con Google para re-escanear con Gemini.');
-      return;
-    }
 
     setStudents((prev) =>
       prev.map((s) => (s.id === studentId ? { ...s, status: 'processing' } : s))
@@ -315,7 +298,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
     try {
       const extracted = await OcrService.processContractPhoto(student.file, student.rotationDegrees || 0, {
         mode: 'gemini',
-        authToken: userToken,
         enhance: true,
       });
 
@@ -364,7 +346,6 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
     try {
       const extracted = await OcrService.processContractPhoto(student.file, newDegrees, {
         mode: ocrMode,
-        authToken: userToken,
         enhance: true,
       });
 
@@ -551,16 +532,16 @@ export const BatchCargoSection: React.FC<BatchCargoSectionProps> = ({ userToken 
           {/* Motor de extracción */}
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => userToken ? setOcrMode('gemini') : alert('Inicia sesión con Google para usar Gemini.')}
+              onClick={() => setOcrMode('gemini')}
               disabled={batchProgress.isActive}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer ${
-                ocrMode === 'gemini' && userToken
+                ocrMode === 'gemini'
                   ? 'bg-emerald-950/70 border-emerald-600/80 text-emerald-300 shadow-sm'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
               }`}
             >
               <Bot className={`w-4 h-4 ${ocrMode === 'gemini' ? 'text-emerald-400' : 'text-slate-400'}`} />
-              Gemini seguro {userToken ? '' : '(requiere Google)'}
+              Gemini AI (2 claves)
             </button>
             <button
               onClick={() => setOcrMode('local')}

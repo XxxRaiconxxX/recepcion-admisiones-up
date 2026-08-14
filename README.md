@@ -65,7 +65,7 @@ Para probar también las rutas `/api/drive` y `/api/ocr` localmente, use `npx ve
 
 ## Configuración segura de Gemini OCR
 
-Gemini se invoca exclusivamente desde `/api/ocr`; las claves no se guardan en `localStorage`, no se incluyen en el bundle web y no viajan en la URL. El proxy exige la misma sesión Google y las mismas cuentas autorizadas configuradas para Drive.
+Gemini se invoca exclusivamente desde `/api/ocr`; las claves no se guardan en `localStorage`, no se incluyen en el bundle web y no viajan en la URL. El Cargo Masivo no requiere iniciar sesión con Google: el proxy limita las solicitudes al mismo origen, valida el lote y aplica un límite por IP. La sesión Google continúa siendo obligatoria únicamente para operaciones privadas de Drive.
 
 Configure en Vercel, para Production y Preview:
 

@@ -117,7 +117,7 @@ test('Gemini incompleto o con membrete nunca se marca como extracción exitosa',
   try {
     const [result] = await OcrService.processSingleBatchWithGemini(
       [{ id: 'photo-1', photoUrl: 'blob:test' }],
-      { mode: 'gemini', authToken: 'test-token' },
+      { mode: 'gemini' },
     );
     assert.equal(result.status, 'error');
     assert.match(result.errorMessage, /Apellidos no legibles/);
@@ -133,6 +133,7 @@ test('el cliente no contiene claves ni llama directamente al endpoint de Gemini'
   assert.doesNotMatch(source, /QVEuQWI4/);
   assert.doesNotMatch(source, /VITE_GEMINI_API_KEY/);
   assert.doesNotMatch(source, /generativelanguage\.googleapis\.com/);
+  assert.doesNotMatch(source, /Authorization:/);
   assert.match(source, /fetch\('\/api\/ocr'/);
 });
 

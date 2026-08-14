@@ -46,7 +46,6 @@ interface StrictGeminiResult extends ContractFields {
 
 interface OcrExecutionOptions {
   mode: OcrMode;
-  authToken?: string;
   signal?: AbortSignal;
   enhance?: boolean;
 }
@@ -338,9 +337,6 @@ export class OcrService {
     batchItems: Array<{ id: string; file?: File; photoUrl: string; rotationDegrees?: number }>,
     options: OcrExecutionOptions & { keySlot?: number },
   ): Promise<BatchItemResult[]> {
-    if (!options.authToken) {
-      throw new Error('Inicia sesión con Google para usar Gemini de forma segura.');
-    }
     throwIfAborted(options.signal);
 
     const images = await Promise.all(
@@ -367,7 +363,6 @@ export class OcrService {
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${options.authToken}`,
         },
         body: JSON.stringify({ images, keySlot: options.keySlot || 0 }),
       });
@@ -576,7 +571,7 @@ export class OcrService {
   ): Promise<ExtractedContractData> {
     throwIfAborted(options.signal);
 
-    if (options.mode === 'gemini' && options.authToken) {
+    if (options.mode === 'gemini') {
       try {
         const single = await this.processSingleBatchWithGemini(
           [{
