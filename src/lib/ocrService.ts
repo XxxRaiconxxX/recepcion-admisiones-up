@@ -36,7 +36,7 @@ export interface BatchProgressEvent {
 export const BATCH_CONFIG = {
   BATCH_SIZE: 6, // 5 a 6 fotos por lote para evitar truncamiento de tokens JSON
   MAX_CONCURRENCY: 2, // 2 lotes simultáneos (fácilmente reducible a 1 si hay 429)
-  MAX_RETRIES_PER_BATCH: 2, // Intentos de reintento por lote
+  MAX_RETRIES_PER_BATCH: 4, // Hasta 4 reintentos con backoff exponencial para evitar caídas a OCR local por rate limit
   MAX_IMAGE_DIMENSION: 1024, // Lado mayor de imagen en píxeles
   JPEG_QUALITY: 0.82 // Calidad de compresión para reducir peso manteniendo legibilidad
 };
@@ -270,17 +270,20 @@ export class OcrService {
 
     // 2. Construir el prompt estructurado con responseSchema
     const promptText = `
-Eres un asistente experto en digitalización de contratos de la Universidad del Pacífico (Paraguay).
-Analiza las siguientes ${resizedImages.length} imágenes de contratos de matrícula adjuntas.
+Eres un asistente experto en digitalización de contratos de matrícula de la Universidad del Pacífico (Paraguay).
+Analiza las siguientes ${resizedImages.length} imágenes de contratos adjuntas.
 Las imágenes están ordenadas secuencialmente del índice 0 al índice ${resizedImages.length - 1}.
 
-Para CADA imagen debes extraer con total exactitud:
-- index: El número de índice de la imagen correspondiente (0 a ${resizedImages.length - 1}).
-- nombres: El texto exacto al lado de "Nombres:".
-- apellidos: El texto exacto al lado de "Apellidos:".
-- nombresApellidos: Combina Nombres y Apellidos en MAYÚSCULAS (ejemplo: "PABLA MARGARITA TROCHE FERNANDEZ").
-- carrera: La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
-- ci: El número de documento o cédula de identidad que figura exactamente al lado de "Nro.:" o "Nro:" (ejemplo: "7261797" o "7373454").
+REGLAS OBLIGATORIAS:
+1. "nombres": El texto exacto al lado de "Nombres:".
+2. "apellidos": El texto exacto al lado de "Apellidos:".
+3. "nombresApellidos": Combina SIEMPRE Nombres y Apellidos en MAYÚSCULAS (ejemplo: "PABLA MARGARITA TROCHE FERNANDEZ", "TATIANA DE JESUS TRINIDAD RODRIGUEZ").
+4. "carrera": La carrera del estudiante (ej: "Medicina", "Odontología", "Derecho", "Administración de Empresas", "Kinesiología y Fisioterapia", "Nutrición").
+5. "ci": El número de cédula que figura al lado de "Nro.:" (ejemplo: "7261797" o "6671418").
+
+PROHIBIDO TOTALMENTE:
+- NUNCA extraigas 'PEDRO JUAN CABALLERO', 'ASUNCIÓN', 'UNIVERSIDAD DEL PACÍFICO', 'SAN MARTÍN' ni direcciones de sedes como nombres de alumnos. El nombre del alumno siempre está en el cuerpo con las etiquetas 'Nombres:' y 'Apellidos:'.
+- Si la foto está de costado (rotada 90° o 270°), lee el texto en su orientación correcta.
 
 Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los índices de 0 a ${resizedImages.length - 1} sin omitir ninguna imagen.
 `;
@@ -306,7 +309,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           index: { type: 'INTEGER', description: 'Índice de la imagen del lote (0 a N-1)' },
           nombres: { type: 'STRING' },
           apellidos: { type: 'STRING' },
-          nombresApellidos: { type: 'STRING', description: 'Nombres y Apellidos completos' },
+          nombresApellidos: { type: 'STRING', description: 'Nombres y Apellidos completos del estudiante' },
           carrera: { type: 'STRING', description: 'Carrera universitaria' },
           ci: { type: 'STRING', description: 'Número de cédula/documento de identidad que está al lado de Nro.:' }
         },
@@ -329,10 +332,11 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     if (!response.ok) {
       const errorText = await response.text();
-      // Si recibimos 429 (Rate Limit), esperar y reintentar
-      if (response.status === 429 && attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
-        console.warn(`Rate limit 429 en lote. Reintentando intento ${attempt + 1}...`);
-        await new Promise((r) => setTimeout(r, 2500 * attempt));
+      // Si recibimos 429 (Rate Limit) o 503, esperar con backoff exponencial y reintentar
+      if ((response.status === 429 || response.status === 503) && attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
+        const delay = 3500 * Math.pow(1.5, attempt - 1);
+        console.warn(`Rate limit o sobrecarga (${response.status}) en lote. Esperando ${Math.round(delay)}ms para reintentar (intento ${attempt + 1})...`);
+        await new Promise((r) => setTimeout(r, delay));
         return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
       }
       throw new Error(`Gemini Batch API Error (${response.status}): ${errorText}`);
@@ -354,8 +358,9 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     if (!isValid) {
       if (attempt <= BATCH_CONFIG.MAX_RETRIES_PER_BATCH) {
+        const delay = 2000 * attempt;
         console.warn(`Respuesta incompleta o índices inválidos en lote. Reintentando intento ${attempt + 1}...`);
-        await new Promise((r) => setTimeout(r, 1500));
+        await new Promise((r) => setTimeout(r, delay));
         return this.processSingleBatchWithGemini(batchItems, apiKey, attempt + 1);
       }
       throw new Error('La respuesta del lote no contiene todos los índices correspondientes a las imágenes enviadas');
@@ -431,6 +436,9 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
           if (onBatchCompleted) {
             onBatchCompleted(batchResults);
           }
+
+          // Breve pausa para no saturar los límites de RPM de la API
+          await new Promise((r) => setTimeout(r, 600));
         } catch (batchError: any) {
           console.warn(`Lote ${batchIndex + 1} falló. Activando fallback individual para este lote:`, batchError?.message);
 
@@ -780,7 +788,12 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
       'CLAUSULA', 'CLÁUSULA', 'VALOR', 'GUARANIES', 'GUARANÍES', 'MATRICULA', 'MATRÍCULA', 'CUOTA', 'FECHA',
       'FIRMA', 'CEDULA', 'CÉDULA', 'CIENCIAS', 'SALUD', 'DERECHO', 'MEDICINA', 'ODONTOLOGIA', 'ODONTOLOGÍA',
       'SOCIALES', 'BECADO', 'REPUBLICA', 'REPÚBLICA', 'TITULO', 'TÍTULO', 'DOMICILIO', 'ESTADO', 'CIVIL',
-      'ENCON', 'ED PU', 'POS EE', 'ADELANTE', 'ESTUDIANTE', 'COMPROMETE', 'ACUERDO'
+      'ENCON', 'ED PU', 'POS EE', 'ADELANTE', 'ESTUDIANTE', 'COMPROMETE', 'ACUERDO',
+      'PEDRO JUAN CABALLERO', 'PEDRO', 'CABALLERO', 'JUAN CABALLERO', 'SAN MARTIN', 'SAN MARTÍN',
+      'TORRES UP', 'O HIGGINS', 'OHIGGINS', 'O\'HIGGINS', 'PADRE O CONNOR', 'PADRE OCONNOR',
+      'OCONNOR', 'PADRE', 'INTERNACIONAL', 'ESPAÑA', 'ESPANA', 'AVDA', 'AVENIDA', 'UN E PEE',
+      'PEE', 'CORREO', 'TELEFONO', 'TELÉFONO', 'LUGAR DE TRABAJO', 'NUMERO DE ESTUDIANTE',
+      'NÚMERO DE ESTUDIANTE', 'HORA', 'IMPRESO POR', 'FOTOCOPIA', 'AUTENTICADA', 'CARNET'
     ];
 
     if (!detectedName) {
@@ -807,7 +820,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
     if (detectedName) {
       const isForbidden = forbiddenLegalPhrases.some((phrase) =>
-        detectedName.toUpperCase() === phrase
+        detectedName.toUpperCase().includes(phrase)
       );
       if (isForbidden) {
         detectedName = '';
@@ -823,7 +836,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los �
 
   private static cleanNameCandidate(candidate: string): string {
     const cutPatterns = [
-      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título|año|telefono|teléfono)\b.*/i,
+      /\b(?:inscripto|inscripta|carrera|facultad|con\s*c\.?i|c\.?i|cedula|cédula|de\s*nacionalidad|mayor\s*de|domiciliad[oa]|fecha|tipo|nro|nacionalidad|estado|colegio|titulo|título|año|telefono|teléfono|pedro\s*juan\s*caballero|asuncion|asunción|torres\s*up)\b.*/i,
       /[\d,;:_()/*#]/g
     ];
 
