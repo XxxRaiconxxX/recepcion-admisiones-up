@@ -104,6 +104,41 @@ export class OcrService {
   }
 
   /**
+   * Convierte autom√°ticamente fotos en formato HEIC/HEIF (iPhone/iOS) a JPEG est√°ndar en el navegador
+   */
+  public static async ensureJpegBlob(fileOrBlob: File | Blob | string): Promise<Blob | File | string> {
+    if (typeof fileOrBlob === 'string') return fileOrBlob;
+
+    const isHeic =
+      fileOrBlob.type === 'image/heic' ||
+      fileOrBlob.type === 'image/heif' ||
+      (fileOrBlob instanceof File && /\.(heic|heif)$/i.test(fileOrBlob.name));
+
+    if (isHeic) {
+      try {
+        const heicModule = await import('heic2any');
+        const heic2anyFn = (heicModule.default || heicModule) as any;
+        const conversionResult = await heic2anyFn({
+          blob: fileOrBlob,
+          toType: 'image/jpeg',
+          quality: 0.88
+        });
+        const convertedBlob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
+        if (fileOrBlob instanceof File) {
+          return new File([convertedBlob], fileOrBlob.name.replace(/\.(heic|heif)$/i, '.jpg'), {
+            type: 'image/jpeg'
+          });
+        }
+        return convertedBlob;
+      } catch (err) {
+        console.warn('Error convirtiendo HEIC a JPEG:', err);
+        return fileOrBlob;
+      }
+    }
+    return fileOrBlob;
+  }
+
+  /**
    * Redimensiona una imagen con Canvas (lado mayor <= 1024px, JPEG calidad 82%)
    * Retorna { base64Data, dataUrl } optimizados para Gemini Vision
    */
@@ -112,6 +147,8 @@ export class OcrService {
     maxDimension = BATCH_CONFIG.MAX_IMAGE_DIMENSION,
     quality = BATCH_CONFIG.JPEG_QUALITY
   ): Promise<{ base64Data: string; dataUrl: string }> {
+    const safeSource = await this.ensureJpegBlob(imageSource);
+
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -155,10 +192,10 @@ export class OcrService {
 
       img.onerror = (err) => reject(err);
 
-      if (typeof imageSource === 'string') {
-        img.src = imageSource;
+      if (typeof safeSource === 'string') {
+        img.src = safeSource;
       } else {
-        img.src = URL.createObjectURL(imageSource);
+        img.src = URL.createObjectURL(safeSource);
       }
     });
   }
@@ -489,6 +526,8 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los √
     rotationDeg = 0,
     cropTopOnly = true
   ): Promise<string> {
+    const safeSource = await this.ensureJpegBlob(imageSource);
+
     return new Promise((resolve) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -498,7 +537,7 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los √
         const ctx = canvas.getContext('2d');
 
         if (!ctx) {
-          resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
+          resolve(typeof safeSource === 'string' ? safeSource : URL.createObjectURL(safeSource));
           return;
         }
 
@@ -560,18 +599,18 @@ Debes devolver EXACTAMENTE un objeto por cada imagen en un array JSON, con los √
           ctx.putImageData(imageData, 0, 0);
           resolve(canvas.toDataURL('image/jpeg', 0.92));
         } catch {
-          resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
+          resolve(typeof safeSource === 'string' ? safeSource : URL.createObjectURL(safeSource));
         }
       };
 
       img.onerror = () => {
-        resolve(typeof imageSource === 'string' ? imageSource : URL.createObjectURL(imageSource));
+        resolve(typeof safeSource === 'string' ? safeSource : URL.createObjectURL(safeSource));
       };
 
-      if (typeof imageSource === 'string') {
-        img.src = imageSource;
+      if (typeof safeSource === 'string') {
+        img.src = safeSource;
       } else {
-        img.src = URL.createObjectURL(imageSource);
+        img.src = URL.createObjectURL(safeSource);
       }
     });
   }

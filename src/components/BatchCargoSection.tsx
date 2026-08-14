@@ -93,28 +93,58 @@ export const BatchCargoSection: React.FC = () => {
     setIsApiKeyModalOpen(false);
   };
 
-  // Manejar selección múltiple de archivos de fotos
+  // Manejar selección múltiple de archivos de fotos (con soporte nativo para iPhone HEIC)
   const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
 
-    const files = Array.from(e.target.files);
-    const newStudents: BatchCargoStudent[] = files.map((file, idx) => ({
-      id: `student_${Date.now()}_${idx}`,
-      file,
-      photoUrl: URL.createObjectURL(file),
-      photoName: file.name,
-      rotationDegrees: 0,
-      nombresApellidos: 'EN COLA DE PROCESAMIENTO...',
-      carrera: 'Medicina',
-      documentos: ['CONTRATO MEDICINA'],
-      observacion: header.observacionGlobal,
-      status: 'pending'
-    }));
+    const rawFiles = Array.from(e.target.files);
+    const hasHeic = rawFiles.some(
+      (f) =>
+        f.type === 'image/heic' ||
+        f.type === 'image/heif' ||
+        /\.(heic|heif)$/i.test(f.name)
+    );
 
-    setStudents((prev) => [...prev, ...newStudents]);
+    if (hasHeic) {
+      setBatchProgress({
+        isActive: true,
+        currentBatch: 0,
+        totalBatches: Math.ceil(rawFiles.length / BATCH_CONFIG.BATCH_SIZE),
+        completedItems: 0,
+        totalItems: rawFiles.length,
+        percentage: 5,
+        message: 'Optimizando y convirtiendo fotos iPhone (HEIC a JPEG)...'
+      });
+    }
+
+    const preparedStudents: BatchCargoStudent[] = [];
+
+    for (let idx = 0; idx < rawFiles.length; idx++) {
+      const file = rawFiles[idx];
+      const converted = await OcrService.ensureJpegBlob(file);
+      const readyFile = converted instanceof File ? converted : file;
+      const readyBlobUrl = URL.createObjectURL(
+        converted instanceof Blob ? converted : file
+      );
+
+      preparedStudents.push({
+        id: `student_${Date.now()}_${idx}`,
+        file: readyFile,
+        photoUrl: readyBlobUrl,
+        photoName: file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+        rotationDegrees: 0,
+        nombresApellidos: 'EN COLA DE PROCESAMIENTO...',
+        carrera: 'Medicina',
+        documentos: ['CONTRATO MEDICINA'],
+        observacion: header.observacionGlobal,
+        status: 'pending'
+      });
+    }
+
+    setStudents((prev) => [...prev, ...preparedStudents]);
 
     // Iniciar procesamiento por lotes con IA
-    await processBatchExecution(newStudents);
+    await processBatchExecution(preparedStudents);
 
     // Resetear input file
     if (fileInputRef.current) {
@@ -396,7 +426,7 @@ export const BatchCargoSection: React.FC = () => {
           ref={fileInputRef}
           onChange={handleFilesSelected}
           multiple
-          accept="image/*"
+          accept="image/*,.heic,.heif,.HEIC,.HEIF"
           className="hidden"
           id="batch-contract-photos"
         />
