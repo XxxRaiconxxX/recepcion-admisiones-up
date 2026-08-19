@@ -1,15 +1,14 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { BarChart3, Home, Layers, Loader2, ShieldCheck, UserCheck, UserPlus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BarChart3, Home, Layers, ShieldCheck, UserCheck, UserPlus } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { ReceptionForm } from './components/ReceptionForm';
 import { BatchCargoSection } from './components/BatchCargoSection';
 import { ComprobantesModal } from './components/ComprobantesModal';
 import { GoogleOAuthModal } from './components/GoogleOAuthModal';
 import { ModuleLanding, type AppModuleRoute } from './components/ModuleLanding';
+import PromisesDashboard from './components/PromisesDashboard';
 import type { StudentData, GoogleUserProfile } from './types/admission';
 import { DriveService } from './lib/driveClient';
-
-const PromisesDashboard = lazy(() => import('./components/PromisesDashboard'));
 
 const routeSegments: Record<Exclude<AppModuleRoute, 'home'>, string> = {
   individual: 'recepcion',
@@ -149,13 +148,7 @@ export function App() {
             {activeRoute === 'masivo' && <BatchCargoSection />}
 
             {activeRoute === 'promesas' && (
-              <Suspense fallback={(
-                <div className="flex min-h-72 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/70 text-slate-400">
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin text-blue-400" /> Cargando Dashboard de Promesas…
-                </div>
-              )}>
-                <PromisesDashboard />
-              </Suspense>
+              <PromisesDashboard />
             )}
           </>
         )}

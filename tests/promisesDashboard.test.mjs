@@ -68,13 +68,19 @@ test('exporta CSV compatible con Excel y conserva observaciones con comillas', (
   assert.match(csv, /"Nombre";"Número";"CI"/);
 });
 
-test('la app expone landing, tres rutas y carga diferida del dashboard', async () => {
-  const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+test('la app expone landing, tres rutas y evita una pantalla vacía si falla un módulo', async () => {
+  const [source, main] = await Promise.all([
+    readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/main.tsx', import.meta.url), 'utf8'),
+  ]);
   assert.match(source, /ModuleLanding/);
   assert.match(source, /recepcion/);
   assert.match(source, /cargo/);
   assert.match(source, /promesas/);
-  assert.match(source, /lazy\(\(\) => import\('\.\/components\/PromisesDashboard'\)\)/);
+  assert.match(source, /import PromisesDashboard from '\.\/components\/PromisesDashboard'/);
+  assert.doesNotMatch(source, /lazy\(\(\) => import\('\.\/components\/PromisesDashboard'\)\)/);
+  assert.match(main, /class AppErrorBoundary/);
+  assert.match(main, /Recargar aplicación/);
 });
 
 test('la sincronización usa trigger instalable, respaldo y validación visible de CI', async () => {
