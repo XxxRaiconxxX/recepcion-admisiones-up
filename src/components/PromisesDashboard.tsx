@@ -122,19 +122,23 @@ const statusLabel = (value: boolean | null) => {
 interface KpiCardProps {
   label: string;
   value: string;
-  detail: string;
+  detailLabel: string;
+  detailValue?: string;
   icon: React.ComponentType<{ className?: string }>;
   accent: string;
 }
 
-const KpiCard: React.FC<KpiCardProps> = ({ label, value, detail, icon: Icon, accent }) => (
+const KpiCard: React.FC<KpiCardProps> = ({ label, value, detailLabel, detailValue, icon: Icon, accent }) => (
   <article className="relative overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/80 p-5 shadow-xl backdrop-blur-sm">
     <div className={`absolute -right-8 -top-8 h-28 w-28 rounded-full ${accent} opacity-10 blur-2xl`} />
     <div className="relative flex items-center justify-between gap-4">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
         <p className="mt-2 text-3xl font-extrabold text-white">{value}</p>
-        <p className="mt-1 text-xs text-slate-500">{detail}</p>
+        <p className="mt-1 text-xs text-slate-300">
+          {detailValue && <span className="mr-1 font-mono font-extrabold text-white">{detailValue}</span>}
+          <span>{detailLabel}</span>
+        </p>
       </div>
       <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${accent} text-white shadow-lg`}>
         <Icon className="h-6 w-6" />
@@ -416,11 +420,11 @@ const PromisesDashboard: React.FC = () => {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <KpiCard label="Total promesas" value={String(kpis.total)} detail="Leads en el filtro actual" icon={Users} accent="bg-blue-600" />
-        <KpiCard label="Becados" value={`${kpis.porcentajeBecados}%`} detail={`${kpis.becados} promesas`} icon={GraduationCap} accent="bg-indigo-600" />
-        <KpiCard label="Con visita" value={`${kpis.porcentajeVisitas}%`} detail={`${kpis.visitas} visitas`} icon={MapPinCheck} accent="bg-cyan-600" />
-        <KpiCard label="Asistieron" value={`${kpis.porcentajeAsistencias}%`} detail={`${kpis.asistencias} asistencias`} icon={CheckCircle2} accent="bg-violet-600" />
-        <KpiCard label="Inscriptos" value={`${kpis.porcentajeInscriptos}%`} detail={`${kpis.inscriptos} conversiones`} icon={CircleDollarSign} accent="bg-emerald-600" />
+        <KpiCard label="Total promesas" value={String(kpis.total)} detailLabel="Leads en el filtro actual" icon={Users} accent="bg-blue-600" />
+        <KpiCard label="Becados" value={`${kpis.porcentajeBecados}%`} detailValue={String(kpis.becados)} detailLabel="promesas" icon={GraduationCap} accent="bg-indigo-600" />
+        <KpiCard label="Con visita" value={`${kpis.porcentajeVisitas}%`} detailValue={String(kpis.visitas)} detailLabel="visitas" icon={MapPinCheck} accent="bg-cyan-600" />
+        <KpiCard label="Asistieron" value={`${kpis.porcentajeAsistencias}%`} detailValue={String(kpis.asistencias)} detailLabel="asistencias" icon={CheckCircle2} accent="bg-violet-600" />
+        <KpiCard label="Inscriptos" value={`${kpis.porcentajeInscriptos}%`} detailValue={String(kpis.inscriptos)} detailLabel="conversiones" icon={CircleDollarSign} accent="bg-emerald-600" />
       </div>
 
       {loading && records.length === 0 ? (
@@ -505,7 +509,7 @@ const PromisesDashboard: React.FC = () => {
                           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
                           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300" title={entry.name}>{entry.name}</span>
                           <span className="font-mono text-xs font-bold text-white">{entry.value}</span>
-                          <span className="w-10 text-right text-[10px] text-slate-500">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
+                          <span className="w-10 text-right font-mono text-[10px] font-bold text-slate-200">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
                         </div>
                       ))}
                     </div>
@@ -539,7 +543,7 @@ const PromisesDashboard: React.FC = () => {
                     <div key={stage.label} className="grid grid-cols-[72px_minmax(0,1fr)_46px] items-center gap-3">
                       <div className="text-right">
                         <p className="text-xs font-bold text-slate-200">{stage.label}</p>
-                        <p className="text-[10px] text-slate-500">{stage.value} registros</p>
+                        <p className="text-[10px] text-slate-300"><span className="font-mono font-extrabold text-white">{stage.value}</span> registros</p>
                       </div>
                       <div className="flex h-12 items-center justify-center rounded-xl border border-slate-800/80 bg-slate-950/60 px-1.5 shadow-inner">
                         <div
@@ -651,7 +655,7 @@ const PromisesDashboard: React.FC = () => {
                           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
                           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300" title={entry.name}>{entry.name}</span>
                           <span className="font-mono text-xs font-bold text-white">{entry.value}</span>
-                          <span className="w-10 text-right text-[10px] text-slate-500">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
+                          <span className="w-10 text-right font-mono text-[10px] font-bold text-slate-200">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
                         </div>
                       ))}
                     </div>

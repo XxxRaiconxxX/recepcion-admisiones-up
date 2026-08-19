@@ -110,6 +110,8 @@ test('la app expone landing, tres rutas y evita una pantalla vacía si falla un 
   assert.match(dashboard, /promises-dashboard/);
   assert.match(dashboard, /itemStyle:\s*\{\s*color: '#dbeafe'/);
   assert.match(dashboard, /<Tooltip \{\.\.\.chartTooltipProps\}/);
+  assert.match(dashboard, /detailValue=\{String\(kpis\.becados\)\}/);
+  assert.match(dashboard, /font-mono font-extrabold text-white/);
   assert.match(styles, /\.promises-dashboard select\s*\{\s*color-scheme: dark;/);
   assert.match(styles, /\.promises-dashboard select option:checked/);
 });
