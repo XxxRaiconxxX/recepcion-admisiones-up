@@ -93,9 +93,11 @@ test('valida y completa las preferencias de gráficos guardadas por el superviso
 });
 
 test('la app expone landing, tres rutas y evita una pantalla vacía si falla un módulo', async () => {
-  const [source, main] = await Promise.all([
+  const [source, main, dashboard, styles] = await Promise.all([
     readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/main.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/PromisesDashboard.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/index.css', import.meta.url), 'utf8'),
   ]);
   assert.match(source, /ModuleLanding/);
   assert.match(source, /recepcion/);
@@ -105,6 +107,9 @@ test('la app expone landing, tres rutas y evita una pantalla vacía si falla un 
   assert.match(source, /useEffect\(\(\) => \{\s*window\.scrollTo\(\{ top: 0 \}\);\s*\}, \[activeRoute\]\)/);
   assert.match(main, /class AppErrorBoundary/);
   assert.match(main, /Recargar aplicación/);
+  assert.match(dashboard, /promises-dashboard/);
+  assert.match(styles, /\.promises-dashboard select\s*\{\s*color-scheme: dark;/);
+  assert.match(styles, /\.promises-dashboard select option:checked/);
 });
 
 test('la sincronización usa trigger instalable, respaldo y validación visible de CI', async () => {

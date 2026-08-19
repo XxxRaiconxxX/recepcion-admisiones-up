@@ -75,7 +75,7 @@ interface ChartTypeSelectProps<T extends string> {
 }
 
 const ChartTypeSelect = <T extends string,>({ label, value, options, onChange }: ChartTypeSelectProps<T>) => (
-  <label className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] font-bold text-slate-400 shadow-inner">
+  <label className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] font-bold text-slate-400 shadow-inner transition duration-300 focus-within:border-blue-500 focus-within:bg-blue-950/40 focus-within:ring-2 focus-within:ring-blue-500/20">
     <span className="hidden sm:inline">Visualización</span>
     <span className="sr-only">{label}</span>
     <select
@@ -281,7 +281,7 @@ const PromisesDashboard: React.FC = () => {
   ];
 
   return (
-    <section className="space-y-5">
+    <section className="promises-dashboard space-y-5">
       <header className="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-gradient-to-r from-slate-900 via-blue-950/50 to-slate-900 p-6 shadow-xl lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">

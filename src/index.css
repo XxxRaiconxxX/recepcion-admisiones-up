@@ -26,6 +26,30 @@
   }
 }
 
+/* Mantiene los controles nativos del dashboard legibles en Windows/Chrome. */
+.promises-dashboard select {
+  color-scheme: dark;
+}
+
+.promises-dashboard select option {
+  color: #e2e8f0;
+  background-color: #0f172a;
+}
+
+.promises-dashboard select option:checked {
+  color: #ffffff;
+  background: linear-gradient(#2563eb, #2563eb);
+}
+
+.promises-dashboard select option:disabled {
+  color: #64748b;
+}
+
+.promises-dashboard select:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.75);
+  outline-offset: 2px;
+}
+
 /* html2canvas 1.x no interpreta los colores OKLCH de Tailwind v4. */
 .pdf-render-root {
   --color-slate-50: #f8fafc;
