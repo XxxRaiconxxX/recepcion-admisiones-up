@@ -4,8 +4,10 @@ import { readFile } from 'node:fs/promises';
 import {
   buildPromesasCsv,
   calculatePromesaKpis,
+  DEFAULT_PROMESA_CHART_PREFERENCES,
   filterPromesas,
   groupPromesas,
+  parsePromesaChartPreferences,
 } from '../src/lib/promisesDashboard.ts';
 
 const record = (id, overrides = {}) => ({
@@ -66,6 +68,28 @@ test('exporta CSV compatible con Excel y conserva observaciones con comillas', (
   assert.ok(csv.startsWith('\uFEFF'));
   assert.match(csv, /"Hermana de ""Ana"""/);
   assert.match(csv, /"Nombre";"Número";"CI"/);
+});
+
+test('valida y completa las preferencias de gráficos guardadas por el supervisor', () => {
+  assert.deepEqual(parsePromesaChartPreferences(null), DEFAULT_PROMESA_CHART_PREFERENCES);
+  assert.deepEqual(parsePromesaChartPreferences('{invalido'), DEFAULT_PROMESA_CHART_PREFERENCES);
+  assert.deepEqual(parsePromesaChartPreferences(JSON.stringify({
+    career: 'donut',
+    funnel: 'bars',
+    advisor: 'horizontal',
+  })), {
+    career: 'donut',
+    funnel: 'bars',
+    advisor: 'horizontal',
+  });
+  assert.deepEqual(parsePromesaChartPreferences(JSON.stringify({
+    career: 'desconocido',
+    funnel: 'bars',
+  })), {
+    career: 'horizontal',
+    funnel: 'bars',
+    advisor: 'donut',
+  });
 });
 
 test('la app expone landing, tres rutas y evita una pantalla vacía si falla un módulo', async () => {

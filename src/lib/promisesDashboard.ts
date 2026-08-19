@@ -1,9 +1,36 @@
 import type {
+  PromesaChartPreferences,
   PromesaFilters,
   PromesaGroupedValue,
   PromesaKpis,
   PromesaRecord,
 } from '../types/promises';
+
+export const DEFAULT_PROMESA_CHART_PREFERENCES: PromesaChartPreferences = {
+  career: 'horizontal',
+  funnel: 'funnel',
+  advisor: 'donut',
+};
+
+export const parsePromesaChartPreferences = (value: string | null): PromesaChartPreferences => {
+  if (!value) return DEFAULT_PROMESA_CHART_PREFERENCES;
+  try {
+    const parsed = JSON.parse(value) as Partial<PromesaChartPreferences>;
+    return {
+      career: ['horizontal', 'vertical', 'donut'].includes(parsed.career || '')
+        ? parsed.career as PromesaChartPreferences['career']
+        : DEFAULT_PROMESA_CHART_PREFERENCES.career,
+      funnel: ['funnel', 'bars'].includes(parsed.funnel || '')
+        ? parsed.funnel as PromesaChartPreferences['funnel']
+        : DEFAULT_PROMESA_CHART_PREFERENCES.funnel,
+      advisor: ['donut', 'horizontal'].includes(parsed.advisor || '')
+        ? parsed.advisor as PromesaChartPreferences['advisor']
+        : DEFAULT_PROMESA_CHART_PREFERENCES.advisor,
+    };
+  } catch {
+    return DEFAULT_PROMESA_CHART_PREFERENCES;
+  }
+};
 
 const normalizeSearch = (value: string) =>
   value

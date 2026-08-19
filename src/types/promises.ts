@@ -1,6 +1,15 @@
 export type PromesaBooleanFilter = 'all' | 'yes' | 'no';
 export type PromesaDateRange = '30' | '90' | 'all';
 export type PromesaDashboardView = 'general' | 'career' | 'advisor' | 'table';
+export type PromesaCareerChartType = 'horizontal' | 'vertical' | 'donut';
+export type PromesaFunnelChartType = 'funnel' | 'bars';
+export type PromesaAdvisorChartType = 'donut' | 'horizontal';
+
+export interface PromesaChartPreferences {
+  career: PromesaCareerChartType;
+  funnel: PromesaFunnelChartType;
+  advisor: PromesaAdvisorChartType;
+}
 
 export interface PromesaRecord {
   id: string;

@@ -24,7 +24,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
+  LabelList,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -33,6 +33,7 @@ import {
   YAxis,
 } from 'recharts';
 import type {
+  PromesaChartPreferences,
   PromesaDashboardView,
   PromesaFilters,
   PromesaRecord,
@@ -40,8 +41,10 @@ import type {
 import {
   buildPromesasCsv,
   calculatePromesaKpis,
+  DEFAULT_PROMESA_CHART_PREFERENCES,
   filterPromesas,
   groupPromesas,
+  parsePromesaChartPreferences,
 } from '../lib/promisesDashboard';
 import {
   fetchPromesas,
@@ -50,7 +53,47 @@ import {
 } from '../lib/promisesService';
 
 const CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#f59e0b', '#ec4899', '#22c55e', '#06b6d4', '#f97316'];
+const CHART_PREFERENCES_KEY = 'promesas-chart-preferences-v1';
 const PAGE_SIZE = 50;
+
+const loadChartPreferences = () => {
+  try {
+    return parsePromesaChartPreferences(window.localStorage.getItem(CHART_PREFERENCES_KEY));
+  } catch {
+    return DEFAULT_PROMESA_CHART_PREFERENCES;
+  }
+};
+
+const shortenChartLabel = (value: string, maxLength = 22) =>
+  value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+
+interface ChartTypeSelectProps<T extends string> {
+  label: string;
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}
+
+const ChartTypeSelect = <T extends string,>({ label, value, options, onChange }: ChartTypeSelectProps<T>) => (
+  <label className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] font-bold text-slate-400 shadow-inner">
+    <span className="hidden sm:inline">Visualización</span>
+    <span className="sr-only">{label}</span>
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange(event.target.value as T)}
+      className="max-w-40 bg-transparent font-semibold text-slate-100 outline-none"
+    >
+      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+  </label>
+);
+
+const EmptyChart = () => (
+  <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/30 px-6 text-center text-sm text-slate-500">
+    No hay datos para los filtros seleccionados.
+  </div>
+);
 
 const defaultFilters: PromesaFilters = {
   search: '',
@@ -132,6 +175,7 @@ const PromisesDashboard: React.FC = () => {
   const [sortKey, setSortKey] = useState<keyof PromesaRecord>('fecha_carga');
   const [sortAscending, setSortAscending] = useState(false);
   const [page, setPage] = useState(1);
+  const [chartPreferences, setChartPreferences] = useState<PromesaChartPreferences>(loadChartPreferences);
 
   const loadRecords = useCallback(async () => {
     if (!isPromisesSupabaseConfigured) return;
@@ -170,6 +214,14 @@ const PromisesDashboard: React.FC = () => {
 
   useEffect(() => setPage(1), [filters, view]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CHART_PREFERENCES_KEY, JSON.stringify(chartPreferences));
+    } catch {
+      // La preferencia visual es opcional; el dashboard sigue funcionando si el navegador la bloquea.
+    }
+  }, [chartPreferences]);
+
   const careers = useMemo(
     () => Array.from(new Set(records.map((record) => record.carrera).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es')),
     [records],
@@ -199,6 +251,9 @@ const PromisesDashboard: React.FC = () => {
   const updateFilter = <K extends keyof PromesaFilters>(key: K, value: PromesaFilters[K]) =>
     setFilters((current) => ({ ...current, [key]: value }));
 
+  const updateChartPreference = <K extends keyof PromesaChartPreferences>(key: K, value: PromesaChartPreferences[K]) =>
+    setChartPreferences((current) => ({ ...current, [key]: value }));
+
   const changeSort = (key: keyof PromesaRecord) => {
     if (key === sortKey) setSortAscending((current) => !current);
     else {
@@ -219,10 +274,10 @@ const PromisesDashboard: React.FC = () => {
     color: '#f8fafc',
   };
   const funnel = [
-    { label: 'Promesas', value: kpis.total, percentage: kpis.total > 0 ? 100 : 0, color: 'from-blue-500 to-blue-600' },
-    { label: 'Visita', value: kpis.visitas, percentage: kpis.porcentajeVisitas, color: 'from-cyan-400 to-teal-500' },
-    { label: 'Asistió', value: kpis.asistencias, percentage: kpis.porcentajeAsistencias, color: 'from-violet-500 to-indigo-500' },
-    { label: 'Inscripto', value: kpis.inscriptos, percentage: kpis.porcentajeInscriptos, color: 'from-pink-500 to-rose-500' },
+    { label: 'Promesas', value: kpis.total, percentage: kpis.total > 0 ? 100 : 0, color: 'from-blue-500 to-blue-600', fill: '#3b82f6' },
+    { label: 'Visita', value: kpis.visitas, percentage: kpis.porcentajeVisitas, color: 'from-cyan-400 to-teal-500', fill: '#14b8a6' },
+    { label: 'Asistió', value: kpis.asistencias, percentage: kpis.porcentajeAsistencias, color: 'from-violet-500 to-indigo-500', fill: '#8b5cf6' },
+    { label: 'Inscripto', value: kpis.inscriptos, percentage: kpis.porcentajeInscriptos, color: 'from-pink-500 to-rose-500', fill: '#ec4899' },
   ];
 
   return (
@@ -361,74 +416,234 @@ const PromisesDashboard: React.FC = () => {
         </div>
       ) : view !== 'table' && (
         <div className="grid gap-5 xl:grid-cols-12">
-          <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl xl:col-span-5">
-            <h3 className="text-base font-bold text-white">Promesas por carrera</h3>
-            <p className="mt-1 text-xs text-slate-500">Distribución del filtro actual</p>
-            <div className="mt-4 h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={careerData} margin={{ top: 10, right: 8, left: -18, bottom: 34 }}>
-                  <CartesianGrid stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} angle={-22} textAnchor="end" interval={0} />
-                  <YAxis stroke="#94a3b8" fontSize={10} allowDecimals={false} />
-                  <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.5 }} />
-                  <Bar dataKey="value" name="Promesas" radius={[6, 6, 0, 0]}>
-                    {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </article>
-
-          <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl xl:col-span-4">
-            <h3 className="text-base font-bold text-white">Embudo de conversión</h3>
-            <p className="mt-1 text-xs text-slate-500">Promesa → Visita → Asistió → Inscripto</p>
-            <div className="mt-5 space-y-3">
-              {funnel.map((stage) => (
-                <div key={stage.label} className="flex items-center gap-3">
-                  <div className="w-20 text-right">
-                    <p className="text-xs font-bold text-slate-200">{stage.label}</p>
-                    <p className="text-[10px] text-slate-500">{stage.value} ({stage.percentage}%)</p>
-                  </div>
-                  <div className="flex flex-1 justify-center">
-                    <div
-                      className={`h-11 rounded-lg bg-gradient-to-r ${stage.color} shadow-lg transition-[width] duration-500 motion-reduce:transition-none`}
-                      style={{ width: `${Math.max(stage.percentage, stage.value > 0 ? 14 : 2)}%` }}
-                      title={`${stage.label}: ${stage.value}`}
-                    />
-                  </div>
+          {(view === 'general' || view === 'career') && (
+            <article className={`min-w-0 overflow-hidden rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900 via-slate-900 to-blue-950/30 p-5 shadow-2xl ${view === 'career' ? 'xl:col-span-12' : 'xl:col-span-7'}`}>
+              <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white">Promesas por carrera</h3>
+                  <p className="mt-1 text-xs text-slate-500">Comparación ordenada de la distribución actual</p>
                 </div>
-              ))}
-            </div>
-          </article>
+                <ChartTypeSelect
+                  label="Tipo de gráfico para promesas por carrera"
+                  value={chartPreferences.career}
+                  options={[
+                    { value: 'horizontal', label: 'Barras horizontales' },
+                    { value: 'vertical', label: 'Barras verticales' },
+                    { value: 'donut', label: 'Gráfico de anillo' },
+                  ]}
+                  onChange={(value) => updateChartPreference('career', value)}
+                />
+              </header>
 
-          <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl xl:col-span-3">
-            <h3 className="text-base font-bold text-white">Ranking de asesores</h3>
-            <p className="mt-1 text-xs text-slate-500">Cantidad de promesas gestionadas</p>
-            <ol className="mt-4 divide-y divide-slate-800">
-              {advisorData.slice(0, 8).map((advisor, index) => (
-                <li key={advisor.name} className="flex items-center gap-3 py-2.5 text-sm">
-                  <span className="w-5 font-mono font-bold text-blue-400">{index + 1}</span>
-                  <span className="min-w-0 flex-1 truncate text-slate-200" title={advisor.name}>{advisor.name}</span>
-                  <span className="font-mono font-bold text-cyan-300">{advisor.value}</span>
-                </li>
-              ))}
-              {advisorData.length === 0 && <li className="py-8 text-center text-xs text-slate-600">Sin datos</li>}
-            </ol>
-          </article>
+              <div className="mt-5">
+                {careerData.length === 0 ? <EmptyChart /> : chartPreferences.career === 'horizontal' ? (
+                  <div style={{ height: Math.max(280, careerData.length * 46 + 48) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart layout="vertical" data={careerData} margin={{ top: 4, right: 42, left: 12, bottom: 8 }}>
+                        <CartesianGrid stroke="#1e293b" horizontal={false} />
+                        <XAxis type="number" stroke="#64748b" fontSize={10} allowDecimals={false} />
+                        <YAxis type="category" dataKey="name" width={150} stroke="#94a3b8" fontSize={10} tickLine={false} tickFormatter={(value) => shortenChartLabel(String(value))} />
+                        <Tooltip
+                          contentStyle={chartTooltipStyle}
+                          cursor={{ fill: '#1e293b', opacity: 0.45 }}
+                          formatter={(value) => [`${Number(value)} promesas`, 'Total']}
+                        />
+                        <Bar dataKey="value" name="Promesas" radius={[0, 8, 8, 0]} maxBarSize={30} isAnimationActive={false}>
+                          {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                          <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={11} fontWeight={700} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : chartPreferences.career === 'vertical' ? (
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={careerData} margin={{ top: 18, right: 12, left: -14, bottom: 56 }}>
+                        <CartesianGrid stroke="#1e293b" vertical={false} />
+                        <XAxis dataKey="name" height={68} stroke="#94a3b8" fontSize={10} angle={-18} textAnchor="end" interval={0} tickFormatter={(value) => shortenChartLabel(String(value), 17)} />
+                        <YAxis stroke="#64748b" fontSize={10} allowDecimals={false} />
+                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        <Bar dataKey="value" name="Promesas" radius={[8, 8, 0, 0]} maxBarSize={54} isAnimationActive={false}>
+                          {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                          <LabelList dataKey="value" position="top" fill="#cbd5e1" fontSize={11} fontWeight={700} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="grid items-center gap-4 lg:grid-cols-[minmax(260px,0.9fr)_minmax(240px,1.1fr)]">
+                    <div className="relative h-72">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={careerData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="82%" paddingAngle={3} stroke="#0f172a" strokeWidth={3} isAnimationActive={false}>
+                            {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                          </Pie>
+                          <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-3xl font-extrabold text-white">{kpis.total}</span>
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Promesas</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                      {careerData.map((entry, index) => (
+                        <div key={entry.name} className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
+                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300" title={entry.name}>{entry.name}</span>
+                          <span className="font-mono text-xs font-bold text-white">{entry.value}</span>
+                          <span className="w-10 text-right text-[10px] text-slate-500">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </article>
+          )}
 
-          {(view === 'advisor' || view === 'general') && advisorData.length > 0 && (
-            <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl xl:col-span-12">
-              <h3 className="text-base font-bold text-white">Promesas por asesor</h3>
-              <div className="mt-4 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={advisorData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={100} paddingAngle={2}>
-                      {advisorData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip contentStyle={chartTooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11, color: '#cbd5e1' }} />
-                  </PieChart>
-                </ResponsiveContainer>
+          {view === 'general' && (
+            <article className="min-w-0 overflow-hidden rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900 via-slate-900 to-violet-950/25 p-5 shadow-2xl xl:col-span-5">
+              <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white">Conversión comercial</h3>
+                  <p className="mt-1 text-xs text-slate-500">Resultado de cada etapa sobre el total filtrado</p>
+                </div>
+                <ChartTypeSelect
+                  label="Tipo de gráfico para conversión comercial"
+                  value={chartPreferences.funnel}
+                  options={[
+                    { value: 'funnel', label: 'Embudo' },
+                    { value: 'bars', label: 'Barras comparativas' },
+                  ]}
+                  onChange={(value) => updateChartPreference('funnel', value)}
+                />
+              </header>
+
+              {chartPreferences.funnel === 'funnel' ? (
+                <div className="mt-6 space-y-3">
+                  {funnel.map((stage) => (
+                    <div key={stage.label} className="grid grid-cols-[72px_minmax(0,1fr)_46px] items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-xs font-bold text-slate-200">{stage.label}</p>
+                        <p className="text-[10px] text-slate-500">{stage.value} registros</p>
+                      </div>
+                      <div className="flex h-12 items-center justify-center rounded-xl border border-slate-800/80 bg-slate-950/60 px-1.5 shadow-inner">
+                        <div
+                          className={`flex h-9 items-center justify-center rounded-lg bg-gradient-to-r ${stage.color} shadow-lg transition-[width] duration-500 motion-reduce:transition-none`}
+                          style={{ width: `${Math.max(stage.percentage, stage.value > 0 ? 12 : 3)}%` }}
+                          title={`${stage.label}: ${stage.value} (${stage.percentage}%)`}
+                        >
+                          {stage.percentage >= 22 && <span className="text-[10px] font-extrabold text-white">{stage.percentage}%</span>}
+                        </div>
+                      </div>
+                      <span className="font-mono text-xs font-bold text-slate-300">{stage.percentage}%</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart layout="vertical" data={funnel} margin={{ top: 8, right: 46, left: 4, bottom: 8 }}>
+                      <CartesianGrid stroke="#1e293b" horizontal={false} />
+                      <XAxis type="number" domain={[0, 100]} stroke="#64748b" fontSize={10} allowDecimals={false} unit="%" />
+                      <YAxis type="category" dataKey="label" width={72} stroke="#94a3b8" fontSize={10} tickLine={false} />
+                      <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)}%`, 'Conversión']} />
+                      <Bar dataKey="percentage" name="Conversión" radius={[0, 8, 8, 0]} maxBarSize={32} isAnimationActive={false}>
+                        {funnel.map((stage) => <Cell key={stage.label} fill={stage.fill} />)}
+                        <LabelList dataKey="percentage" position="right" fill="#cbd5e1" fontSize={11} fontWeight={700} formatter={(value) => `${value}%`} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </article>
+          )}
+
+          {(view === 'general' || view === 'advisor') && (
+            <article className="min-w-0 overflow-hidden rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900 to-cyan-950/20 p-5 shadow-2xl xl:col-span-4">
+              <h3 className="text-base font-bold text-white">Ranking de asesores</h3>
+              <p className="mt-1 text-xs text-slate-500">Promesas gestionadas en el filtro actual</p>
+              <ol className="mt-4 space-y-2">
+                {advisorData.slice(0, 8).map((advisor, index) => (
+                  <li key={advisor.name} className="rounded-xl border border-slate-800/80 bg-slate-950/45 p-3">
+                    <div className="flex items-center gap-3 text-sm">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 font-mono text-[11px] font-bold text-blue-300">{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate font-semibold text-slate-200" title={advisor.name}>{advisor.name}</span>
+                      <span className="font-mono font-bold text-cyan-300">{advisor.value}</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
+                      <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400" style={{ width: `${(advisor.value / Math.max(advisorData[0]?.value || 1, 1)) * 100}%` }} />
+                    </div>
+                  </li>
+                ))}
+                {advisorData.length === 0 && <li className="py-10 text-center text-xs text-slate-600">Sin datos</li>}
+              </ol>
+            </article>
+          )}
+
+          {(view === 'advisor' || view === 'general') && (
+            <article className="min-w-0 overflow-hidden rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/25 p-5 shadow-2xl xl:col-span-8">
+              <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white">Distribución por asesor</h3>
+                  <p className="mt-1 text-xs text-slate-500">Participación individual sobre las promesas visibles</p>
+                </div>
+                <ChartTypeSelect
+                  label="Tipo de gráfico para distribución por asesor"
+                  value={chartPreferences.advisor}
+                  options={[
+                    { value: 'donut', label: 'Gráfico de anillo' },
+                    { value: 'horizontal', label: 'Barras horizontales' },
+                  ]}
+                  onChange={(value) => updateChartPreference('advisor', value)}
+                />
+              </header>
+
+              <div className="mt-5">
+                {advisorData.length === 0 ? <EmptyChart /> : chartPreferences.advisor === 'horizontal' ? (
+                  <div style={{ height: Math.max(280, advisorData.length * 46 + 48) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart layout="vertical" data={advisorData} margin={{ top: 4, right: 42, left: 12, bottom: 8 }}>
+                        <CartesianGrid stroke="#1e293b" horizontal={false} />
+                        <XAxis type="number" stroke="#64748b" fontSize={10} allowDecimals={false} />
+                        <YAxis type="category" dataKey="name" width={150} stroke="#94a3b8" fontSize={10} tickLine={false} tickFormatter={(value) => shortenChartLabel(String(value))} />
+                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        <Bar dataKey="value" name="Promesas" radius={[0, 8, 8, 0]} maxBarSize={30} isAnimationActive={false}>
+                          {advisorData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                          <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={11} fontWeight={700} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="grid items-center gap-4 lg:grid-cols-[minmax(260px,0.9fr)_minmax(240px,1.1fr)]">
+                    <div className="relative h-72">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={advisorData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="82%" paddingAngle={3} stroke="#0f172a" strokeWidth={3} isAnimationActive={false}>
+                            {advisorData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                          </Pie>
+                          <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-3xl font-extrabold text-white">{kpis.total}</span>
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Promesas</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                      {advisorData.map((entry, index) => (
+                        <div key={entry.name} className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }} />
+                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300" title={entry.name}>{entry.name}</span>
+                          <span className="font-mono text-xs font-bold text-white">{entry.value}</span>
+                          <span className="w-10 text-right text-[10px] text-slate-500">{kpis.total ? Math.round((entry.value / kpis.total) * 100) : 0}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </article>
           )}

@@ -65,18 +65,18 @@ Después, crear un nuevo despliegue. El frontend solo recibe la clave pública/a
 1. Crear el Sheet maestro con una pestaña por asesor.
 2. Abrir **Extensiones → Apps Script**.
 3. Copiar [`PromesasSync.gs`](../apps-script/PromesasSync.gs) al proyecto vinculado al Sheet.
-4. Ejecutar una vez desde el editor:
+4. Abrir **Configuración del proyecto → Propiedades de la secuencia de comandos** y crear:
 
-```javascript
-configurarSincronizacionPromesas(
-  'https://TU_PROJECT_REF.supabase.co/functions/v1/sync-promesa',
-  'EL_MISMO_SHEETS_SYNC_SECRET'
-);
-prepararTodasLasPestanas();
-instalarTriggersPromesas();
+```text
+PROMESAS_EDGE_URL=https://TU_PROJECT_REF.supabase.co/functions/v1/sync-promesa
+PROMESAS_SYNC_SECRET=EL_MISMO_SHEETS_SYNC_SECRET
 ```
 
-5. Aceptar los permisos solicitados por Google.
+5. Desde el selector de funciones del editor, ejecutar primero
+   `prepararTodasLasPestanas()` y después `instalarTriggersPromesas()`.
+   No ejecutar `configurarSincronizacionPromesas()` desde ese selector: requiere
+   parámetros y el editor la invocaría sin ellos.
+6. Aceptar los permisos solicitados por Google.
 
 `instalarTriggersPromesas()` crea dos triggers instalables:
 
