@@ -77,8 +77,8 @@ test('la app expone landing, tres rutas y evita una pantalla vacía si falla un 
   assert.match(source, /recepcion/);
   assert.match(source, /cargo/);
   assert.match(source, /promesas/);
-  assert.match(source, /import PromisesDashboard from '\.\/components\/PromisesDashboard'/);
-  assert.doesNotMatch(source, /lazy\(\(\) => import\('\.\/components\/PromisesDashboard'\)\)/);
+  assert.match(source, /lazy\(\(\) => import\('\.\/components\/PromisesDashboard'\)\)/);
+  assert.match(source, /useEffect\(\(\) => \{\s*window\.scrollTo\(\{ top: 0 \}\);\s*\}, \[activeRoute\]\)/);
   assert.match(main, /class AppErrorBoundary/);
   assert.match(main, /Recargar aplicación/);
 });
