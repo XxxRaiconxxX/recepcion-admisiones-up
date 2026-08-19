@@ -267,11 +267,24 @@ const PromisesDashboard: React.FC = () => {
     saveAs(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `promesas-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
-  const chartTooltipStyle = {
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
-    borderRadius: '12px',
-    color: '#f8fafc',
+  const chartTooltipProps = {
+    contentStyle: {
+      backgroundColor: 'rgba(15, 23, 42, 0.98)',
+      border: '1px solid #475569',
+      borderRadius: '12px',
+      boxShadow: '0 16px 40px rgba(2, 6, 23, 0.55)',
+      padding: '10px 12px',
+    },
+    labelStyle: {
+      color: '#ffffff',
+      fontWeight: 700,
+      marginBottom: '5px',
+    },
+    itemStyle: {
+      color: '#dbeafe',
+      fontWeight: 600,
+      padding: 0,
+    },
   };
   const funnel = [
     { label: 'Promesas', value: kpis.total, percentage: kpis.total > 0 ? 100 : 0, color: 'from-blue-500 to-blue-600', fill: '#3b82f6' },
@@ -444,7 +457,7 @@ const PromisesDashboard: React.FC = () => {
                         <XAxis type="number" stroke="#64748b" fontSize={10} allowDecimals={false} />
                         <YAxis type="category" dataKey="name" width={150} stroke="#94a3b8" fontSize={10} tickLine={false} tickFormatter={(value) => shortenChartLabel(String(value))} />
                         <Tooltip
-                          contentStyle={chartTooltipStyle}
+                          {...chartTooltipProps}
                           cursor={{ fill: '#1e293b', opacity: 0.45 }}
                           formatter={(value) => [`${Number(value)} promesas`, 'Total']}
                         />
@@ -462,7 +475,7 @@ const PromisesDashboard: React.FC = () => {
                         <CartesianGrid stroke="#1e293b" vertical={false} />
                         <XAxis dataKey="name" height={68} stroke="#94a3b8" fontSize={10} angle={-18} textAnchor="end" interval={0} tickFormatter={(value) => shortenChartLabel(String(value), 17)} />
                         <YAxis stroke="#64748b" fontSize={10} allowDecimals={false} />
-                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        <Tooltip {...chartTooltipProps} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
                         <Bar dataKey="value" name="Promesas" radius={[8, 8, 0, 0]} maxBarSize={54} isAnimationActive={false}>
                           {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
                           <LabelList dataKey="value" position="top" fill="#cbd5e1" fontSize={11} fontWeight={700} />
@@ -478,7 +491,7 @@ const PromisesDashboard: React.FC = () => {
                           <Pie data={careerData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="82%" paddingAngle={3} stroke="#0f172a" strokeWidth={3} isAnimationActive={false}>
                             {careerData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
                           </Pie>
-                          <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                          <Tooltip {...chartTooltipProps} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
                         </PieChart>
                       </ResponsiveContainer>
                       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
@@ -548,7 +561,7 @@ const PromisesDashboard: React.FC = () => {
                       <CartesianGrid stroke="#1e293b" horizontal={false} />
                       <XAxis type="number" domain={[0, 100]} stroke="#64748b" fontSize={10} allowDecimals={false} unit="%" />
                       <YAxis type="category" dataKey="label" width={72} stroke="#94a3b8" fontSize={10} tickLine={false} />
-                      <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)}%`, 'Conversión']} />
+                      <Tooltip {...chartTooltipProps} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)}%`, 'Conversión']} />
                       <Bar dataKey="percentage" name="Conversión" radius={[0, 8, 8, 0]} maxBarSize={32} isAnimationActive={false}>
                         {funnel.map((stage) => <Cell key={stage.label} fill={stage.fill} />)}
                         <LabelList dataKey="percentage" position="right" fill="#cbd5e1" fontSize={11} fontWeight={700} formatter={(value) => `${value}%`} />
@@ -608,7 +621,7 @@ const PromisesDashboard: React.FC = () => {
                         <CartesianGrid stroke="#1e293b" horizontal={false} />
                         <XAxis type="number" stroke="#64748b" fontSize={10} allowDecimals={false} />
                         <YAxis type="category" dataKey="name" width={150} stroke="#94a3b8" fontSize={10} tickLine={false} tickFormatter={(value) => shortenChartLabel(String(value))} />
-                        <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                        <Tooltip {...chartTooltipProps} cursor={{ fill: '#1e293b', opacity: 0.45 }} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
                         <Bar dataKey="value" name="Promesas" radius={[0, 8, 8, 0]} maxBarSize={30} isAnimationActive={false}>
                           {advisorData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
                           <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={11} fontWeight={700} />
@@ -624,7 +637,7 @@ const PromisesDashboard: React.FC = () => {
                           <Pie data={advisorData} dataKey="value" nameKey="name" innerRadius="56%" outerRadius="82%" paddingAngle={3} stroke="#0f172a" strokeWidth={3} isAnimationActive={false}>
                             {advisorData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
                           </Pie>
-                          <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
+                          <Tooltip {...chartTooltipProps} formatter={(value) => [`${Number(value)} promesas`, 'Total']} />
                         </PieChart>
                       </ResponsiveContainer>
                       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">

@@ -108,6 +108,8 @@ test('la app expone landing, tres rutas y evita una pantalla vacía si falla un 
   assert.match(main, /class AppErrorBoundary/);
   assert.match(main, /Recargar aplicación/);
   assert.match(dashboard, /promises-dashboard/);
+  assert.match(dashboard, /itemStyle:\s*\{\s*color: '#dbeafe'/);
+  assert.match(dashboard, /<Tooltip \{\.\.\.chartTooltipProps\}/);
   assert.match(styles, /\.promises-dashboard select\s*\{\s*color-scheme: dark;/);
   assert.match(styles, /\.promises-dashboard select option:checked/);
 });
