@@ -1,6 +1,6 @@
 # 🎓 Sistema Web de Recepción de Documentos y Cargo de Entrega (Universidad del Pacífico)
 
-Sistema web integral diseñado para automatizar y acelerar el proceso de recepción de documentos de alumnos, emisión de **Recibo Oficial UP** (Imagen 1), **Cargo de Entrega Interno** (Imagen 2) e integración directa con **Google Drive**.
+Sistema web integral para recepción de documentos, emisión de comprobantes, Cargo Masivo por OCR y seguimiento comercial de promesas de inscripción.
 
 ![Universidad del Pacífico](public/logo-up.png)
 
@@ -31,6 +31,14 @@ Sistema web integral diseñado para automatizar y acelerar el proceso de recepci
    - Impresión nativa en A4 sin descuadre de márgenes.
    - Exportación directa a **Microsoft Word (.docx)** para el Cargo de Entrega.
 
+6. **Dashboard de Promesas**:
+   - Pantalla inicial con acceso a los tres módulos mediante rutas `#/recepcion`, `#/cargo` y `#/promesas`.
+   - KPIs, embudo, gráficas por carrera/asesor, filtros combinables, tabla ordenable y exportación CSV.
+   - Lectura inicial y actualizaciones en tiempo real mediante Supabase.
+   - Sincronización desde un Sheet maestro por Apps Script y Edge Function con reintentos y advertencias de CI.
+
+La configuración completa del nuevo módulo está en [`docs/PROMESAS_SETUP.md`](docs/PROMESAS_SETUP.md).
+
 ---
 
 ## 🛠️ Tecnologías Utilizadas
@@ -42,6 +50,7 @@ Sistema web integral diseñado para automatizar y acelerar el proceso de recepci
 - **Generación PDF**: `html2pdf.js`
 - **Integración Cloud**: Vercel Function + Google Apps Script + `DriveApp`
 - **Verificación de identidad**: Google Identity Services + `google-auth-library`
+- **Promesas**: Supabase Postgres + Realtime + Edge Functions + Recharts
 
 ---
 
